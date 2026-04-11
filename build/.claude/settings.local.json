@@ -1,0 +1,6 @@
+{
+  "enabledMcpjsonServers": [
+    "game_server_rag"
+  ],
+  "enableAllProjectMcpServers": true
+}

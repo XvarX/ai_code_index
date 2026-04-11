@@ -1,0 +1,122 @@
+"""
+search_test.py - 交互式向量搜索测试
+输入文本，返回最相关的代码块
+
+用法:
+  cd game_server_rag
+  python search_test.py
+"""
+
+import json
+import os
+import lancedb
+from openai import OpenAI
+import yaml
+
+# 加载配置
+with open('config.yaml', encoding='utf-8') as f:
+    config = yaml.safe_load(f)
+
+# 初始化
+embed_client = OpenAI(
+    api_key=config['embedding']['api_key'],
+    base_url=config['embedding']['base_url'],
+)
+db_conn = lancedb.connect(os.path.join('data', 'lancedb'))
+table = db_conn.open_table("game_server_code")
+
+print(f"知识库中共 {table.count_rows()} 条记录")
+print("输入搜索文本（输入 q 退出）\n")
+
+
+def build_where(conditions):
+    """构建 SQL where 字符串"""
+    parts = []
+    for key, value in conditions:
+        escaped = str(value).replace("'", "''")
+        parts.append(f"{key} = '{escaped}'")
+    return ' AND '.join(parts) if parts else None
+
+
+def search(query, module=None, action=None, n=5):
+    # 向量化查询
+    resp = embed_client.embeddings.create(
+        model=config['embedding']['model'],
+        input=[query],
+    )
+    embedding = resp.data[0].embedding
+
+    # 构建过滤条件
+    conditions = []
+    if module:
+        conditions.append(('module', module))
+    if action:
+        conditions.append(('action', action))
+
+    q = table.search(embedding).metric('cosine').limit(n)
+    where = build_where(conditions)
+    if where:
+        q = q.where(where, prefilter=True)
+
+    return q.to_list()
+
+
+def print_results(results):
+    if not results:
+        print("  未找到结果\n")
+        return
+
+    for i, row in enumerate(results):
+        print(f"  [{i+1}] {row.get('function', '')}")
+        print(f"      文件: {row.get('file', '')}:{row.get('line', '')}")
+        print(f"      模块: {row.get('module', '')} | 动作: {row.get('action', '')} | 类: {row.get('struct', '')}")
+        print(f"      描述: {row.get('description', '')}")
+        print(f"      距离: {row['_distance']:.4f}")
+        # 代码预览，取前6行
+        text = row.get('text', '')
+        code_lines = text.split('\n')
+        preview = '\n'.join(code_lines[:6])
+        if len(code_lines) > 6:
+            preview += f"\n      ... (共 {len(code_lines)} 行)"
+        print(f"      代码预览:\n      {preview}")
+        print()
+
+
+# 交互循环
+while True:
+    try:
+        query = input("搜索> ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print("\n退出")
+        break
+
+    if query.lower() == 'q':
+        break
+    if not query:
+        continue
+
+    # 支持格式: module:xxx action:xxx 搜索文本
+    module = None
+    action = None
+    parts = query.split()
+    remaining = []
+    for p in parts:
+        if p.startswith('module:'):
+            module = p.split(':', 1)[1]
+        elif p.startswith('action:'):
+            action = p.split(':', 1)[1]
+        else:
+            remaining.append(p)
+
+    search_text = ' '.join(remaining) if remaining else query
+
+    filters = []
+    if module:
+        filters.append(f"模块={module}")
+    if action:
+        filters.append(f"动作={action}")
+    filter_str = f" (过滤: {', '.join(filters)})" if filters else ""
+
+    print(f"  搜索: \"{search_text}\"{filter_str}\n")
+    results = search(search_text, module=module, action=action)
+    print_results(results)

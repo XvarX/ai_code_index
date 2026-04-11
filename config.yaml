@@ -1,0 +1,58 @@
+project:
+  name: "game_server"
+  # 支持三种配置方式（优先级从高到低）：
+  # 1. 环境变量 GAME_SERVER_ROOT
+  # 2. 相对于 config.yaml 的路径（使用 ./testhd）
+  # 3. 绝对路径（不推荐，会导致跨机器问题）
+  root: "${GAME_SERVER_ROOT:-./testhd}"  # 使用环境变量或相对路径
+  language: "python"
+  ignore_dirs:
+    - "__pycache__"
+    - ".git"
+    - "venv"
+    - "env"
+    - "node_modules"
+    - "migrations"
+    - ".idea"
+    - ".vscode"
+  file_patterns:
+    - "*.py"
+
+  # 模块分析配置
+  module_analysis:
+    # 强制作为整体分析的顶级模块（即使下面有子文件夹）
+    force_whole_modules:
+      - "scene"
+      - "network"
+      - "config"
+
+    # 跳过分析的子目录（这些目录不会被当作独立模块）
+    skip_submodules:
+      - "__pycache__"
+      - "tests"
+      - "utils"
+
+    # 自动检测阈值：子模块包含至少这么多个 .py 文件才会被当作独立模块
+    min_files_for_submodule: 2
+
+chunking:
+  file_threshold: 300
+  max_tokens: 1500
+
+embedding:
+  provider: "glm"
+  model: "embedding-3"
+  base_url: "https://open.bigmodel.cn/api/paas/v4"
+  api_key: "fc39a6e1d4dc485e9ac875eb677419b3.xWoPVB7G5KFw5mIp"  # TODO: 填你的API Key，或设置环境变量 OPENAI_API_KEY
+
+llm:
+  provider: "glm"
+  model: "glm-4"
+  base_url: "https://open.bigmodel.cn/api/paas/v4"
+  api_key: "fc39a6e1d4dc485e9ac875eb677419b3.xWoPVB7G5KFw5mIp"  # TODO: 填你的API Key，或设置环境变量 OPENAI_API_KEY
+  max_tokens: 100
+  concurrency: 2  # 最大同时请求数，一个返回下一个才发
+
+lsp:
+  server: "pylsp"
+  timeout: 30

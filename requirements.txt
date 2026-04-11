@@ -1,0 +1,14 @@
+# MCP Server
+mcp>=1.0
+
+# 向量数据库
+lancedb>=0.6
+
+# LLM 和 Embedding
+openai>=1.30
+
+# SCIP 索引解析
+protobuf>=4.0
+
+# YAML 配置
+pyyaml>=6.0
