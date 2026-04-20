@@ -203,14 +203,19 @@ class RAGSearcher:
 
     def search_by_type(self, query, chunk_type="", module="", action="", target="", n_results=5):
         """按类型搜索（function/class_summary/module_summary），支持精确过滤"""
-        conditions = {}
+        conditions = []
         if chunk_type:
-            conditions['type'] = chunk_type
+            conditions.append({'type': chunk_type})
         if module:
-            conditions['module'] = module
+            conditions.append({'module': module})
         if action:
-            conditions['action'] = action
+            conditions.append({'action': action})
         if target:
-            conditions['target'] = target
-        where = conditions if conditions else None
+            conditions.append({'target': target})
+        if len(conditions) > 1:
+            where = {'$and': conditions}
+        elif conditions:
+            where = conditions[0]
+        else:
+            where = None
         return self._search(query, where, n_results=n_results)

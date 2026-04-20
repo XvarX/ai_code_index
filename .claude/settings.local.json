@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C /e/space/labspace/ai_code_index log --oneline -10)",
+      "Bash(python check_setup.py)",
+      "Bash(pip install *)",
+      "Bash(python build/build_all.py)",
+      "Bash(python -c ' *)"
+    ]
+  }
+}

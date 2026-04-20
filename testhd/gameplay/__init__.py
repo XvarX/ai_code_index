@@ -14,6 +14,7 @@ from . import monster
 from . import monster2
 from . import monster3
 from . import monster4
+from . import monster5
 from . import box
 g_HDInfo["Monster"] = monster.CMonster()
 g_HDInfo["Monster"].Init("Monster")
@@ -23,6 +24,8 @@ g_HDInfo["Monster3"] = monster3.CMonster3()
 g_HDInfo["Monster3"].Init("Monster3")
 g_HDInfo["Monster4"] = monster4.CMonster4()
 g_HDInfo["Monster4"].Init("Monster4")
+g_HDInfo["Monster5"] = monster5.CMonster5()
+g_HDInfo["Monster5"].Init("Monster5")
 g_HDInfo["Box"] = box.CBox()
 g_HDInfo["Box"].Init("Box")
 
