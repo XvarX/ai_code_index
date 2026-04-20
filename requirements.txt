@@ -2,7 +2,7 @@
 mcp>=1.0
 
 # 向量数据库
-lancedb>=0.6
+chromadb>=0.4.0
 
 # LLM 和 Embedding
 openai>=1.30

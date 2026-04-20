@@ -71,6 +71,46 @@ def check_scip_available() -> bool:
     return shutil.which('scip-python') is not None
 
 
+def _ensure_git_repo(project_root: str) -> bool:
+    """
+    确保项目目录是 Git 仓库，如果不是则自动初始化
+    返回 True 如果已经初始化或成功初始化
+    """
+    git_dir = os.path.join(project_root, '.git')
+    if os.path.exists(git_dir):
+        return True  # 已经是 Git 仓库
+
+    print(f"  [SCIP] 项目不是 Git 仓库，自动初始化...")
+    try:
+        import subprocess
+        subprocess.run(
+            ['git', 'init'],
+            cwd=project_root,
+            capture_output=True,
+            check=True,
+            shell=(sys.platform == 'win32')
+        )
+        subprocess.run(
+            ['git', 'add', '.'],
+            cwd=project_root,
+            capture_output=True,
+            check=True,
+            shell=(sys.platform == 'win32')
+        )
+        subprocess.run(
+            ['git', 'commit', '-m', 'Initial commit for SCIP'],
+            cwd=project_root,
+            capture_output=True,
+            check=True,
+            shell=(sys.platform == 'win32')
+        )
+        print(f"  [SCIP] Git 仓库初始化完成")
+        return True
+    except Exception as e:
+        print(f"  [SCIP] Git 初始化失败: {e}")
+        return False
+
+
 def generate_index(project_root: str, output_path: str) -> str:
     """
     运行 scip-python 生成 SCIP 索引
@@ -84,6 +124,17 @@ def generate_index(project_root: str, output_path: str) -> str:
     """
     output_dir = os.path.dirname(output_path)
     os.makedirs(output_dir, exist_ok=True)
+
+    # 自动初始化 Git 仓库（如果需要）
+    if not _ensure_git_repo(project_root):
+        raise RuntimeError(
+            f"无法初始化 Git 仓库: {project_root}\n"
+            f"SCIP 需要项目是 Git 仓库。请手动执行：\n"
+            f"  cd {project_root}\n"
+            f"  git init\n"
+            f"  git add .\n"
+            f"  git commit -m 'Initial commit'"
+        )
 
     # Windows: 自动修复 scip-python 的 path.sep bug
     if sys.platform == 'win32':
@@ -99,18 +150,44 @@ def generate_index(project_root: str, output_path: str) -> str:
 
     print(f"  [SCIP] 生成索引: {project_root}")
 
-    result = subprocess.run(
+    # 实时输出 scip-python 的日志，让用户看到进度
+    # cwd 设为 project_root，防止 scip-python 受父进程 CWD 影响索引错误目录
+    proc = subprocess.Popen(
         cmd,
-        capture_output=True, text=True,
-        timeout=300,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        cwd=project_root,
         shell=(sys.platform == 'win32'),
     )
 
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"scip-python 失败 (exit {result.returncode}):\n"
-            f"{result.stderr[:500]}"
-        )
+    # 实时打印 stdout
+    for line in proc.stdout:
+        print(f"  [SCIP] {line.rstrip()}")
+
+    # 等待结束，收集 stderr 用于错误报告
+    _, stderr = proc.communicate(timeout=300)
+    returncode = proc.returncode
+
+    if returncode != 0:
+        # 检查是否是 Git 仓库相关的错误
+        stderr_lower = stderr.lower()
+        if 'not a git repository' in stderr_lower or 'git' in stderr_lower:
+            print(f"  [SCIP] 跳过：项目不是 Git 仓库")
+            print(f"  [提示] 在 {project_root} 执行以下命令初始化 Git：")
+            print(f"        cd {project_root}")
+            print(f"        git init")
+            print(f"        git add .")
+            print(f"        git commit -m 'Initial commit'")
+            raise RuntimeError(
+                f"scip-python 需要 Git 仓库，但 {project_root} 不是 Git 仓库。\n"
+                f"请在项目目录初始化 Git 仓库。"
+            )
+        else:
+            raise RuntimeError(
+                f"scip-python 失败 (exit {returncode}):\n"
+                f"{stderr[:500]}"
+            )
 
     if not os.path.exists(output_path):
         raise FileNotFoundError(f"索引文件未生成: {output_path}")

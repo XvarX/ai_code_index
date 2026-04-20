@@ -77,7 +77,7 @@ class MCPAgentSimulator:
             self.process.stdin.close()
             self.process.terminate()
             self.process.wait()
-            print("⏹️  MCP 服务器已停止")
+            print("[停止] MCP 服务器已停止")
 
     def send_request(self, method: str, params: Dict[str, Any] = None) -> Dict:
         """
@@ -207,7 +207,7 @@ class MCPAgentSimulator:
     def interactive_session(self):
         """交互式会话模式"""
         print("\n" + "="*60)
-        print("🤖 MCP Agent 交互模式")
+        print("[MCP Agent] 交互模式")
         print("="*60)
         print("可用命令:")
         print("  【函数层】")
@@ -232,13 +232,13 @@ class MCPAgentSimulator:
 
         while True:
             try:
-                user_input = input("\n🔍 输入命令: ").strip()
+                user_input = input("\n[输入] 请输入命令: ").strip()
 
                 if not user_input:
                     continue
 
                 if user_input in ["quit", "exit", "q"]:
-                    print("👋 再见！")
+                    print("[再见] 退出程序")
                     break
 
                 parts = user_input.split()
@@ -288,14 +288,14 @@ class MCPAgentSimulator:
                     })
 
                 else:
-                    print(f"❓ 未知命令: {user_input}")
+                    print(f"[未知] 命令: {user_input}")
                     print("   输入 'list' 查看所有工具")
 
             except KeyboardInterrupt:
-                print("\n\n⚠️  中断信号，退出...")
+                print("\n\n[中断] 用户中断，退出...")
                 break
             except Exception as e:
-                print(f"❌ 错误: {e}")
+                print(f"[错误] {e}")
 
 
 def main():
@@ -312,7 +312,7 @@ def main():
 
     # 检查文件是否存在
     if not os.path.exists(server_path):
-        print(f"❌ 错误：找不到 MCP 服务器文件：{server_path}")
+        print(f"[错误] 找不到 MCP 服务器文件：{server_path}")
         print(f"   当前目录：{current_dir}")
         print(f"   请确保 mcp_server/server.py 存在")
         return

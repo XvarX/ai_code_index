@@ -9,6 +9,7 @@ server.py - MCP Server 主程序（使用标准 MCP SDK）
 
 import sys
 import os
+import json
 import logging
 from datetime import datetime
 import asyncio
@@ -130,86 +131,51 @@ def create_tool(name: str, description: str, parameters: dict) -> Tool:
 async def list_tools() -> list[Tool]:
     """列出所有可用工具"""
     return [
-        # 三层知识库查询工具
+        # 第一层：符号搜索（精确、零 API 调用）
         create_tool(
-            "find_module_summary",
-            "查找模块的概述信息，包含标准流程、入口点等。这是了解'如何使用一个模块'的最佳方式。",
+            "search_symbol",
+            "按名称搜索符号定义（类名/函数名），比 RAG 更快更精确",
             {
                 "type": "object",
                 "properties": {
-                    "module_name": {
-                        "type": "string",
-                        "description": "模块名，如 scene, gameplay/monster"
-                    }
+                    "name": {"type": "string", "description": "符号名（类名/函数名/方法名）"},
+                    "kind": {"type": "string", "description": "类型过滤: class/method/function", "default": ""}
                 }
             }
         ),
         create_tool(
-            "find_class_summary",
-            "查找类的概述信息，包含职责、核心方法等。",
+            "list_symbols",
+            "列出文件中的所有类和方法",
             {
                 "type": "object",
                 "properties": {
-                    "class_name": {
-                        "type": "string",
-                        "description": "类名，如 SceneManager, MonsterManager"
-                    }
+                    "file": {"type": "string", "description": "文件路径"},
+                    "kind": {"type": "string", "description": "类型过滤: class/method/function", "default": ""}
                 }
             }
         ),
         create_tool(
-            "search_by_type",
-            "按类型搜索代码。支持自然语言查询。",
+            "module_overview",
+            "列出模块中的所有类和顶层函数",
             {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "搜索查询"},
-                    "chunk_type": {
-                        "type": "string",
-                        "description": "类型过滤: function/class_summary/module_summary",
-                        "default": ""
-                    },
-                    "n_results": {"type": "integer", "default": 5}
-                }
-            }
-        ),
-        # 函数级查询工具
-        create_tool(
-            "find_function",
-            "按功能类型查找函数代码。",
-            {
-                "type": "object",
-                "properties": {
-                    "module": {"type": "string", "description": "模块名"},
-                    "action": {"type": "string", "description": "动作类型"},
-                    "target": {"type": "string", "description": "操作对象"},
-                    "keyword": {"type": "string", "default": ""}
+                    "module_path": {"type": "string", "description": "模块路径，如 testhd/gameplay"}
                 }
             }
         ),
         create_tool(
-            "find_by_struct",
-            "查找某个类的所有方法或特定方法。",
+            "find_inheritance",
+            "查找类的继承关系（父类/子类）",
             {
                 "type": "object",
                 "properties": {
-                    "struct_name": {"type": "string", "description": "类名"},
-                    "method_filter": {"type": "string", "default": ""}
+                    "name": {"type": "string", "description": "类名"},
+                    "direction": {"type": "string", "description": "parent 查父类, children 查子类", "default": "parent"}
                 }
             }
         ),
-        create_tool(
-            "find_by_pattern",
-            "按代码模式查找。",
-            {
-                "type": "object",
-                "properties": {
-                    "pattern_type": {"type": "string", "description": "模式类型"},
-                    "module": {"type": "string", "default": ""}
-                }
-            }
-        ),
-        # LSP 工具
+        # 第二层：代码导航（SCIP 精确定位）
         create_tool(
             "goto_definition",
             "精确跳转到定义。",
@@ -245,6 +211,65 @@ async def list_tools() -> list[Tool]:
                 }
             }
         ),
+        # 第三层：模糊搜索（RAG，仅用于初始发现）
+        create_tool(
+            "find_module_summary",
+            "查找模块的概述信息，包含标准流程、入口点等。这是了解'如何使用一个模块'的最佳方式。注意：返回的是已有代码的描述，仅用于理解架构，不要照搬模块名或类名到新代码中。",
+            {
+                "type": "object",
+                "properties": {
+                    "module_name": {
+                        "type": "string",
+                        "description": "模块名，如 scene, gameplay/monster"
+                    }
+                }
+            }
+        ),
+        create_tool(
+            "find_class_summary",
+            "查找类的概述信息，包含职责、核心方法等。注意：返回的是已有代码的描述，仅用于理解架构，不要照搬模块名或类名到新代码中。",
+            {
+                "type": "object",
+                "properties": {
+                    "class_name": {
+                        "type": "string",
+                        "description": "类名，如 SceneManager, MonsterManager"
+                    }
+                }
+            }
+        ),
+        create_tool(
+            "search_by_type",
+            "按类型搜索代码。支持自然语言查询。注意：返回的是已有代码的描述，仅用于理解架构，不要照搬模块名或类名到新代码中。",
+            {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "搜索查询"},
+                    "chunk_type": {
+                        "type": "string",
+                        "description": "类型过滤: function/class_summary/module_summary",
+                        "default": ""
+                    },
+                    "module": {"type": "string", "description": "模块名过滤", "default": ""},
+                    "action": {"type": "string", "description": "动作类型过滤", "default": ""},
+                    "target": {"type": "string", "description": "操作对象过滤", "default": ""},
+                    "n_results": {"type": "integer", "default": 5}
+                }
+            }
+        ),
+        create_tool(
+            "find_function",
+            "按功能类型查找函数代码（向后兼容）。注意：返回的是已有代码的描述，仅用于理解架构，不要照搬模块名或类名到新代码中。",
+            {
+                "type": "object",
+                "properties": {
+                    "module": {"type": "string", "description": "模块名"},
+                    "action": {"type": "string", "description": "动作类型"},
+                    "target": {"type": "string", "description": "操作对象"},
+                    "keyword": {"type": "string", "default": ""}
+                }
+            }
+        ),
     ]
 
 
@@ -256,33 +281,27 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     logger.info(f"[调用] {name}({arguments})")
 
     try:
-        if name == "find_module_summary":
-            result = rag.find_module_summary(arguments.get("module_name", ""))
-        elif name == "find_class_summary":
-            result = rag.find_class_summary(arguments.get("class_name", ""))
-        elif name == "search_by_type":
-            result = rag.search_by_type(
-                arguments.get("query", ""),
-                arguments.get("chunk_type", ""),
-                arguments.get("n_results", 5)
+        # 第一层：符号搜索
+        if name == "search_symbol":
+            result = scip.search_symbol(
+                arguments.get("name", ""),
+                arguments.get("kind", "")
             )
-        elif name == "find_function":
-            result = rag.find_function(
-                arguments.get("module", ""),
-                arguments.get("action", ""),
-                arguments.get("target", ""),
-                arguments.get("keyword", "")
+        elif name == "list_symbols":
+            result = scip.list_symbols(
+                arguments.get("file", ""),
+                arguments.get("kind", "")
             )
-        elif name == "find_by_struct":
-            result = rag.find_by_struct(
-                arguments.get("struct_name", ""),
-                arguments.get("method_filter", "")
+        elif name == "module_overview":
+            result = scip.module_overview(
+                arguments.get("module_path", "")
             )
-        elif name == "find_by_pattern":
-            result = rag.find_by_pattern(
-                arguments.get("pattern_type", ""),
-                arguments.get("module", "")
+        elif name == "find_inheritance":
+            result = scip.find_inheritance(
+                arguments.get("name", ""),
+                arguments.get("direction", "parent")
             )
+        # 第二层：代码导航
         elif name == "goto_definition":
             result = scip.get_definition(
                 arguments.get("file"),
@@ -300,6 +319,40 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 arguments.get("line"),
                 arguments.get("direction", "outgoing")
             )
+        # 第三层：模糊搜索
+        elif name == "find_module_summary":
+            result = rag.find_module_summary(arguments.get("module_name", ""))
+        elif name == "find_class_summary":
+            result = rag.find_class_summary(arguments.get("class_name", ""))
+        elif name == "search_by_type":
+            result = rag.search_by_type(
+                arguments.get("query", ""),
+                arguments.get("chunk_type", ""),
+                arguments.get("module", ""),
+                arguments.get("action", ""),
+                arguments.get("target", ""),
+                arguments.get("n_results", 5)
+            )
+        elif name == "find_function":
+            result = rag.find_function(
+                arguments.get("module", ""),
+                arguments.get("action", ""),
+                arguments.get("target", ""),
+                arguments.get("keyword", "")
+            )
+        # 已废弃工具（保留兼容）
+        elif name == "find_by_struct":
+            result = json.dumps({
+                "deprecated": True,
+                "message": "find_by_struct 已废弃，请使用 search_symbol(name) 按名称搜索类，或 list_symbols(file) 列出文件中的类和方法",
+                "alternative": "search_symbol / list_symbols"
+            }, ensure_ascii=False)
+        elif name == "find_by_pattern":
+            result = json.dumps({
+                "deprecated": True,
+                "message": "find_by_pattern 已废弃，请使用 search_symbol(name) 或 search_by_type(query) 替代",
+                "alternative": "search_symbol / search_by_type"
+            }, ensure_ascii=False)
         else:
             result = f'{{"error": "未知工具: {name}"}}'
 

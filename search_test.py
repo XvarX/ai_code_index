@@ -9,7 +9,7 @@ search_test.py - 交互式向量搜索测试
 
 import json
 import os
-import lancedb
+import chromadb
 from openai import OpenAI
 import yaml
 
@@ -22,20 +22,24 @@ embed_client = OpenAI(
     api_key=config['embedding']['api_key'],
     base_url=config['embedding']['base_url'],
 )
-db_conn = lancedb.connect(os.path.join('data', 'lancedb'))
-table = db_conn.open_table("game_server_code")
+db_client = chromadb.PersistentClient(path=os.path.join('data', 'chroma_db'))
+collection = db_client.get_or_create_collection(
+    name="game_server_code",
+    metadata={"hnsw:space": "cosine"},
+)
 
-print(f"知识库中共 {table.count_rows()} 条记录")
+print(f"知识库中共 {collection.count()} 条记录")
 print("输入搜索文本（输入 q 退出）\n")
 
 
-def build_where(conditions):
-    """构建 SQL where 字符串"""
-    parts = []
-    for key, value in conditions:
-        escaped = str(value).replace("'", "''")
-        parts.append(f"{key} = '{escaped}'")
-    return ' AND '.join(parts) if parts else None
+def build_where(module=None, action=None):
+    """构建 ChromaDB where 条件"""
+    conditions = {}
+    if module:
+        conditions['module'] = module
+    if action:
+        conditions['action'] = action
+    return conditions if conditions else None
 
 
 def search(query, module=None, action=None, n=5):
@@ -47,34 +51,33 @@ def search(query, module=None, action=None, n=5):
     embedding = resp.data[0].embedding
 
     # 构建过滤条件
-    conditions = []
-    if module:
-        conditions.append(('module', module))
-    if action:
-        conditions.append(('action', action))
+    where = build_where(module, action)
 
-    q = table.search(embedding).metric('cosine').limit(n)
-    where = build_where(conditions)
+    kwargs = {
+        "query_embeddings": [embedding],
+        "n_results": n,
+    }
     if where:
-        q = q.where(where, prefilter=True)
+        kwargs["where"] = where
 
-    return q.to_list()
+    return collection.query(**kwargs)
 
 
 def print_results(results):
-    if not results:
+    if not results["ids"][0]:
         print("  未找到结果\n")
         return
 
-    for i, row in enumerate(results):
-        print(f"  [{i+1}] {row.get('function', '')}")
-        print(f"      文件: {row.get('file', '')}:{row.get('line', '')}")
-        print(f"      模块: {row.get('module', '')} | 动作: {row.get('action', '')} | 类: {row.get('struct', '')}")
-        print(f"      描述: {row.get('description', '')}")
-        print(f"      距离: {row['_distance']:.4f}")
-        # 代码预览，取前6行
-        text = row.get('text', '')
-        code_lines = text.split('\n')
+    for i, doc_id in enumerate(results["ids"][0]):
+        meta = results["metadatas"][0][i]
+        distance = results["distances"][0][i]
+        doc = results["documents"][0][i]
+        print(f"  [{i+1}] {meta.get('function', '')}")
+        print(f"      文件: {meta.get('file', '')}:{meta.get('line', '')}")
+        print(f"      模块: {meta.get('module', '')} | 动作: {meta.get('action', '')} | 类: {meta.get('struct', '')}")
+        print(f"      描述: {meta.get('description', '')}")
+        print(f"      距离: {distance:.4f}")
+        code_lines = doc.split('\n')
         preview = '\n'.join(code_lines[:6])
         if len(code_lines) > 6:
             preview += f"\n      ... (共 {len(code_lines)} 行)"

@@ -33,6 +33,7 @@ ENV/
 *~
 
 # Database
+data
 data/chroma_db/
 data/lancedb/
 data/index.scip

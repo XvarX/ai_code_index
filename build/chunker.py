@@ -258,6 +258,18 @@ def _split_long_function(func_node, source_lines, filepath, module_doc, class_na
 # 主提取逻辑
 # ============================================================
 
+def _is_skip_global_node(node):
+    """判断顶层节点是否应该跳过（import、模块docstring）"""
+    # 跳过 import 语句
+    if isinstance(node, (ast.Import, ast.ImportFrom)):
+        return True
+    # 跳过模块 docstring（已经通过 module_doc 捕获）
+    if isinstance(node, ast.Expr):
+        if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+            return True
+    return False
+
+
 def extract_chunks(filepath):
     """从单个Python文件提取所有代码块"""
     source = _read_source(filepath)
@@ -275,8 +287,36 @@ def extract_chunks(filepath):
 
     chunks = []
 
+    # 收集连续的全局语句，遇到函数/类时刷新
+    global_nodes = []
+
+    def _flush_global_nodes():
+        """将累积的全局语句刷为一个 chunk"""
+        if not global_nodes:
+            return
+        code_parts = []
+        for n in global_nodes:
+            code_parts.append(_extract_node_source(source_lines, n))
+        code = '\n'.join(code_parts)
+        first = global_nodes[0]
+        last = global_nodes[-1]
+        chunks.append({
+            'type': 'global',
+            'name': f"{os.path.basename(filepath)} (全局代码)",
+            'code': code,
+            'file': filepath,
+            'start_line': first.lineno,
+            'end_line': getattr(last, 'end_lineno', last.lineno),
+            'module_docstring': module_doc,
+            'docstring': '',
+            'class_name': None,
+            'struct_def': None,
+        })
+        global_nodes.clear()
+
     for node in ast.iter_child_nodes(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            _flush_global_nodes()
             line_count = _node_line_count(node)
             if line_count <= MAX_CHUNK_LINES:
                 chunks.append({
@@ -295,6 +335,7 @@ def extract_chunks(filepath):
                 chunks.extend(_split_long_function(node, source_lines, filepath, module_doc))
 
         elif isinstance(node, ast.ClassDef):
+            _flush_global_nodes()
             # 1. 类概览chunk
             overview = _extract_class_overview(node, source_lines)
             chunks.append({
@@ -335,6 +376,17 @@ def extract_chunks(filepath):
                         for c in sub_chunks:
                             c['struct_def'] = overview
                         chunks.extend(sub_chunks)
+
+        elif _is_skip_global_node(node):
+            # import、模块docstring → 跳过，不纳入全局代码
+            continue
+
+        else:
+            # 收集全局语句（赋值、初始化、条件分支等）
+            global_nodes.append(node)
+
+    # 刷新尾部可能残留的全局语句
+    _flush_global_nodes()
 
     # 空文件兜底
     if not chunks and source.strip():

@@ -83,7 +83,7 @@ async def describe_one(client, chunk, model, max_tokens):
 
     prompt = PROMPT_TEMPLATE.format(
         file=chunk['file'],
-        class_name=chunk.get('class_name') or '无（顶层函数）',
+        class_name=chunk.get('class_name') or ('全局代码' if chunk.get('type') == 'global' else '无（顶层函数）'),
         module_doc=(chunk.get('module_docstring') or '无')[:200],
         class_context=class_context,
         extra_context=extra,

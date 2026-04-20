@@ -1,10 +1,10 @@
 """
 embedder.py - 向量化入库
-通过 OpenAI 兼容 API 调用向量模型生成 Embedding，存入 LanceDB
+通过 OpenAI 兼容 API 调用向量模型生成 Embedding，存入 ChromaDB
 """
 
 import os
-import lancedb
+import chromadb
 from openai import OpenAI
 
 
@@ -42,12 +42,12 @@ def batch_embed(client, model, texts, batch_size=16):
 
 
 def embed_and_store(chunks, config):
-    db_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'lancedb')
-    db_conn = lancedb.connect(db_path)
+    db_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'chroma_db')
+    db_client = chromadb.PersistentClient(path=db_path)
 
     # 每次构建覆盖旧数据
     try:
-        db_conn.drop_table("game_server_code")
+        db_client.delete_collection("game_server_code")
         print("  已清除旧数据")
     except Exception:
         pass
@@ -147,12 +147,27 @@ def embed_and_store(chunks, config):
     for row, emb in zip(rows, embeddings):
         row['vector'] = emb
 
-    # 入库
-    table = db_conn.create_table("game_server_code", rows, mode='overwrite')
+    # 入库（分批添加，ChromaDB 限制最大批次 5461）
+    collection = db_client.get_or_create_collection(
+        name="game_server_code",
+        metadata={"hnsw:space": "cosine"},
+    )
+
+    max_batch_size = 5461
+    total = len(rows)
+    for i in range(0, total, max_batch_size):
+        batch = rows[i:i + max_batch_size]
+        collection.add(
+            ids=[r['id'] for r in batch],
+            documents=[r['text'] for r in batch],
+            embeddings=[r['vector'] for r in batch],
+            metadatas=[{k: v for k, v in r.items() if k not in ('id', 'text', 'vector')} for r in batch],
+        )
+        print(f"  已添加 {min(i + max_batch_size, total)}/{total} 条记录")
 
     # 验证
-    count = table.count_rows()
-    print(f"  入库完成: LanceDB中共 {count} 条记录")
+    count = collection.count()
+    print(f"  入库完成: ChromaDB中共 {count} 条记录")
 
     # 统计各类型数量
     type_stats = {}
@@ -161,20 +176,45 @@ def embed_and_store(chunks, config):
         type_stats[t] = type_stats.get(t, 0) + 1
     print(f"  类型统计: {type_stats}")
 
-    return table
+    return collection
 
 
 def get_collection(config):
-    db_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'lancedb')
-    db_conn = lancedb.connect(db_path)
-    return db_conn.open_table("game_server_code")
+    db_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'chroma_db')
+    db_client = chromadb.PersistentClient(path=db_path)
+    return db_client.get_or_create_collection(
+        name="game_server_code",
+        metadata={"hnsw:space": "cosine"},
+    )
 
 
 if __name__ == '__main__':
     import json
     import yaml
-    with open('../config.yaml', encoding='utf-8') as f:
+    import os
+
+    # 加载配置
+    config_path = os.path.join(os.path.dirname(__file__), '..', 'config.yaml')
+    with open(config_path, encoding='utf-8') as f:
         config = yaml.safe_load(f)
-    with open('../data/described_chunks.json', 'r', encoding='utf-8') as f:
+
+    data_dir = os.path.join(os.path.dirname(__file__), '..', 'data')
+
+    # 加载所有 chunks（函数 + 类 + 模块）
+    with open(os.path.join(data_dir, 'described_chunks.json'), 'r', encoding='utf-8') as f:
         chunks = json.load(f)
-    embed_and_store(chunks, config)
+
+    with open(os.path.join(data_dir, 'class_summaries.json'), 'r', encoding='utf-8') as f:
+        class_summaries = json.load(f)
+
+    with open(os.path.join(data_dir, 'module_summaries.json'), 'r', encoding='utf-8') as f:
+        module_summaries = json.load(f)
+
+    # 合并所有 chunks
+    all_chunks = chunks + class_summaries + module_summaries
+
+    print(f"加载了 {len(chunks)} 个函数, {len(class_summaries)} 个类, {len(module_summaries)} 个模块")
+    print(f"总共 {len(all_chunks)} 条记录准备入库...")
+
+    # 向量化入库
+    embed_and_store(all_chunks, config)

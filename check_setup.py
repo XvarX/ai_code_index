@@ -36,7 +36,7 @@ def main():
         ("mcp_server/mcp_agent_simulator.py", "MCP 模拟器"),
         ("utils/config_helper.py", "配置辅助函数"),
         ("testhd", "项目代码目录"),
-        ("data/lancedb", "向量数据库"),
+        ("data/chroma_db", "向量数据库"),
     ]
 
     all_files_exist = True
@@ -48,7 +48,7 @@ def main():
     print("\n【Python 模块检查】")
     modules = [
         ("yaml", "PyYAML"),
-        ("lancedb", "LanceDB"),
+        ("chromadb", "ChromaDB"),
         ("mcp", "MCP SDK"),
         ("lsp_client", "LSP 客户端"),
     ]

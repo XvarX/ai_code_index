@@ -104,8 +104,11 @@ def tag_chunk(chunk):
 
 
 def tag_all_chunks(chunks):
-    for chunk in chunks:
+    total = len(chunks)
+    for i, chunk in enumerate(chunks):
         chunk['tags'] = tag_chunk(chunk)
+        if (i + 1) % 50 == 0 or i + 1 == total:
+            print(f"  打标进度: {i + 1}/{total}")
     return chunks
 
 

@@ -2,8 +2,8 @@
   "mcpServers": {
     "game_server_rag": {
       "command": "python",
-      "args": ["C:\\Users\\admin\\game_server_rag\\mcp_server\\server.py"],
-      "cwd": "C:\\Users\\admin\\game_server_rag"
+      "args": ["../mcp_server/server.py"],
+      "cwd": ".."
     }
   }
 }

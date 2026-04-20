@@ -43,6 +43,87 @@ class SCIPIndex:
         self.call_graph_incoming = defaultdict(set)
         # enclosing symbol -> (file, start_line, end_line) — 函数/方法的范围
         self.function_ranges = {}  # symbol -> {file, start_line, end_line}
+        # 短名索引
+        self.name_to_symbols = defaultdict(list)   # "CMonster" -> [full_symbol, ...]
+        self.file_definitions = defaultdict(list)   # "gameplay/box.py" -> [{symbol, kind, line, name}]
+        self.inheritance_parent = {}                # child_sym -> parent_sym
+        self.inheritance_children = defaultdict(list)  # parent_sym -> [child_sym, ...]
+
+    @staticmethod
+    def _extract_short_name(symbol: str):
+        """从 SCIP 符号提取短名和类型。
+        Returns (short_name, kind) or (None, None)。
+        """
+        parts = symbol.split(' ')
+        if len(parts) < 5:
+            return None, None
+
+        descriptor = parts[-1]
+
+        # 取最后一个 '/' 之后的部分
+        if '/' in descriptor:
+            name_part = descriptor.rsplit('/', 1)[1]
+        else:
+            name_part = descriptor
+
+        # 跳过参数 (filepath)
+        if name_part.startswith('(') and name_part.endswith(')'):
+            return None, None
+
+        if name_part.endswith('#'):
+            # 类定义: CBox#
+            return name_part[:-1], 'class'
+        elif '#' in name_part:
+            # 方法: CBox#NewHour().
+            class_name, rest = name_part.split('#', 1)
+            method_name = rest.rstrip('.').split('(')[0]
+            return f"{class_name}.{method_name}", 'method'
+        elif name_part.endswith('().'):
+            # 函数: check_file_exists().
+            return name_part[:-3], 'function'
+        elif name_part.endswith('.'):
+            # 变量: config.
+            return name_part[:-1], 'variable'
+        elif name_part.endswith(':'):
+            # 模块: __init__:
+            return name_part[:-1], 'module'
+
+        return None, None
+
+    @staticmethod
+    def _detect_path_prefix(proto_documents, project_root):
+        """
+        检测 scip-python 生成的路径是否有项目名前缀。
+
+        scip-python 会索引 project_root 所在的整个 git 仓库，
+        导致路径带有项目目录名前缀（如 testhd/gameplay/...）。
+        本方法检测这种情况，返回需要过滤和剥离的前缀。
+
+        Returns:
+            (filter_prefix, should_strip) - 前缀字符串和是否需要剥离，无前缀时返回 ("", False)
+        """
+        if not project_root:
+            return "", False
+
+        project_name = os.path.basename(project_root.rstrip(os.sep))
+        if not project_name:
+            return "", False
+
+        # 统计以 project_name/ 开头的文档数量
+        prefix_slash = project_name + '/'
+        prefix_backslash = project_name + '\\'
+        matched = 0
+        for doc in proto_documents:
+            p = doc.relative_path
+            if p.startswith(prefix_slash) or p.startswith(prefix_backslash):
+                matched += 1
+
+        # 如果有匹配的文档，说明 scip-python 从上级 git 仓库索引的
+        if matched > 0:
+            logger.info(f"SCIP 路径前缀检测: '{project_name}/' 前缀匹配 {matched} 个文档，将过滤并剥离")
+            return prefix_slash, True
+
+        return "", False
 
     @classmethod
     def from_file(cls, index_path: str, project_root: str = "") -> 'SCIPIndex':
@@ -56,8 +137,23 @@ class SCIPIndex:
 
         logger.info(f"SCIP 索引加载: {len(proto.documents)} 文档, {len(proto.external_symbols)} 外部符号")
 
+        # 检测路径前缀（scip-python 可能从上级 git 仓库索引，导致路径带项目名前缀）
+        filter_prefix, should_strip = self._detect_path_prefix(proto.documents, project_root)
+
+        skipped = 0
         for doc in proto.documents:
-            rel_path = doc.relative_path.replace('/', os.sep)
+            raw_path = doc.relative_path
+
+            # 过滤：跳过项目目录外的文件
+            if should_strip:
+                normalized = raw_path.replace('\\', '/')
+                if not normalized.startswith(filter_prefix):
+                    skipped += 1
+                    continue
+                # 剥离前缀，使路径相对于项目根目录
+                raw_path = normalized[len(filter_prefix):]
+
+            rel_path = raw_path.replace('/', os.sep)
 
             # 处理 occurrences
             for occ in doc.occurrences:
@@ -103,6 +199,16 @@ class SCIPIndex:
                         'line': start_line,
                         'char': start_char,
                     }
+                    # 短名索引
+                    short_name, sym_kind = self._extract_short_name(occ.symbol)
+                    if short_name:
+                        self.name_to_symbols[short_name].append(occ.symbol)
+                        self.file_definitions[rel_path].append({
+                            'symbol': occ.symbol,
+                            'kind': sym_kind,
+                            'line': start_line,
+                            'name': short_name,
+                        })
 
                 # 函数范围（用于调用图构建）
                 if is_def and occ.enclosing_range:
@@ -113,18 +219,18 @@ class SCIPIndex:
                         'end_line': er[2] if len(er) > 2 else er[0],
                     }
 
-            # 处理 symbols（relationships）
+            # 处理 symbols（relationships - 继承关系）
             for sym in doc.symbols:
                 for rel in sym.relationships:
-                    if rel.is_reference:
-                        # symbol -> 被引用的 symbol
-                        pass
                     if rel.is_implementation:
-                        # symbol -> 实现者
-                        pass
+                        self.inheritance_parent[sym.symbol] = rel.symbol
+                        self.inheritance_children[rel.symbol].append(sym.symbol)
 
         # 构建调用图
         self._build_call_graphs()
+
+        if skipped > 0:
+            logger.info(f"SCIP 索引过滤: 跳过 {skipped} 个项目目录外的文件")
 
         logger.info(f"SCIP 索引就绪: {len(self.definitions)} 定义, "
                      f"{len(self.call_graph_outgoing)} 调用关系")
@@ -271,3 +377,110 @@ class SCIPIndex:
                     graph[key].append(f"{callee_defn['file']}:{callee_defn['line'] + 1} ({name})")
 
         return dict(graph)
+
+    def search_symbol(self, name: str, kind: str = "") -> str:
+        """按短名搜索符号定义（类名/函数名），比 RAG 更快更精确"""
+        symbols = self.name_to_symbols.get(name, [])
+        if not symbols:
+            return json.dumps({"error": f"未找到符号: {name}"}, ensure_ascii=False)
+
+        results = []
+        for sym in symbols:
+            defn = self.definitions.get(sym)
+            if not defn:
+                continue
+            short_name, sym_kind = self._extract_short_name(sym)
+            if kind and sym_kind != kind:
+                continue
+            results.append({
+                "name": short_name or name,
+                "file": defn['file'],
+                "line": defn['line'] + 1,
+                "kind": sym_kind,
+            })
+
+        return json.dumps(results, ensure_ascii=False, indent=2)
+
+    def list_symbols(self, file: str, kind: str = "") -> str:
+        """列出文件中所有定义"""
+        file_normalized = file.replace('/', os.sep)
+        defs = self.file_definitions.get(file_normalized, [])
+
+        if not defs:
+            return json.dumps({"error": f"未找到文件: {file}"}, ensure_ascii=False)
+
+        results = []
+        for d in defs:
+            if kind and d['kind'] != kind:
+                continue
+            results.append({
+                "name": d['name'],
+                "file": file_normalized,
+                "line": d['line'] + 1,
+                "kind": d['kind'],
+            })
+
+        return json.dumps(results, ensure_ascii=False, indent=2)
+
+    def module_overview(self, module_path: str) -> str:
+        """列出模块中所有类和顶层函数"""
+        module_prefix = module_path.replace('/', os.sep)
+
+        classes = []
+        functions = []
+
+        for file_path, defs in self.file_definitions.items():
+            if not file_path.startswith(module_prefix):
+                continue
+            for d in defs:
+                if d['kind'] == 'class':
+                    classes.append({
+                        "name": d['name'],
+                        "file": file_path,
+                        "line": d['line'] + 1,
+                    })
+                elif d['kind'] == 'function':
+                    functions.append({
+                        "name": d['name'],
+                        "file": file_path,
+                        "line": d['line'] + 1,
+                    })
+
+        return json.dumps({
+            "classes": classes,
+            "functions": functions,
+        }, ensure_ascii=False, indent=2)
+
+    def find_inheritance(self, name: str, direction: str = "parent") -> str:
+        """查找类的继承关系"""
+        symbols = self.name_to_symbols.get(name, [])
+        class_symbols = [sym for sym in symbols
+                         if self._extract_short_name(sym)[1] == 'class']
+
+        if not class_symbols:
+            return json.dumps({"error": f"未找到类: {name}"}, ensure_ascii=False)
+
+        results = []
+        for sym in class_symbols:
+            if direction == "parent":
+                parent = self.inheritance_parent.get(sym)
+                if parent:
+                    defn = self.definitions.get(parent)
+                    parent_name, _ = self._extract_short_name(parent)
+                    results.append({
+                        "parent": parent_name or parent,
+                        "file": defn['file'] if defn else "",
+                        "line": defn['line'] + 1 if defn else 0,
+                    })
+            else:
+                children = self.inheritance_children.get(sym, [])
+                for child_sym in children:
+                    defn = self.definitions.get(child_sym)
+                    child_name, _ = self._extract_short_name(child_sym)
+                    results.append({
+                        "child": child_name or child_sym,
+                        "file": defn['file'] if defn else "",
+                        "line": defn['line'] + 1 if defn else 0,
+                    })
+
+        return json.dumps(results, ensure_ascii=False, indent=2)

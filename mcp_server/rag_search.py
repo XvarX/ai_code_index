@@ -5,7 +5,7 @@ rag_search.py - RAG查询实现
 
 import json
 import os
-import lancedb
+import chromadb
 from openai import OpenAI
 
 
@@ -13,11 +13,13 @@ class RAGSearcher:
     def __init__(self, config):
         db_path = config.get('db_path', '')
         if not os.path.isabs(db_path):
-            # 基于本文件位置算绝对路径: mcp_server/../data/lancedb
             here = os.path.dirname(os.path.abspath(__file__))
-            db_path = os.path.normpath(os.path.join(here, '..', 'data', 'lancedb'))
-        self.db = lancedb.connect(db_path)
-        self.table = self.db.open_table("game_server_code")
+            db_path = os.path.normpath(os.path.join(here, '..', 'data', 'chroma_db'))
+        self.db_client = chromadb.PersistentClient(path=db_path)
+        self.collection = self.db_client.get_or_create_collection(
+            name="game_server_code",
+            metadata={"hnsw:space": "cosine"},
+        )
 
         self.embed_client = OpenAI(
             api_key=config['embedding'].get('api_key') or os.getenv('OPENAI_API_KEY'),
@@ -32,109 +34,108 @@ class RAGSearcher:
         )
         return resp.data[0].embedding
 
-    def _build_where_clause(self, where_filter):
-        """将 ChromaDB 风格的 dict filter 翻译为 LanceDB SQL where 字符串"""
-        if where_filter is None:
-            return None
-        if '$and' in where_filter:
-            parts = [self._build_single_condition(c) for c in where_filter['$and']]
-            return ' AND '.join(parts)
-        return self._build_single_condition(where_filter)
-
-    def _build_single_condition(self, cond):
-        """构建单个 SQL 等值条件"""
-        key, value = next(iter(cond.items()))
-        escaped = str(value).replace("'", "''")
-        return f"{key} = '{escaped}'"
-
     def _search(self, query_text, where_filter=None, n_results=5):
         embedding = self._embed_query(query_text)
 
-        query = self.table.search(embedding).metric('cosine').limit(n_results)
+        kwargs = {
+            "query_embeddings": [embedding],
+            "n_results": n_results,
+        }
+        if where_filter:
+            kwargs["where"] = where_filter
 
-        where_clause = self._build_where_clause(where_filter)
-        if where_clause:
-            query = query.where(where_clause, prefilter=True)
+        results = self.collection.query(**kwargs)
 
-        results = query.to_list()
-
-        if not results:
-            return json.dumps({"error": "未找到结果"}, ensure_ascii=False, indent=2)
+        if not results["ids"][0]:
+            return json.dumps({"error": "未找到结果"}, ensure_ascii=False)
 
         output = []
-        for row in results:
-            chunk_type = row.get('type', '')
-            distance = row['_distance']
+        for i, doc_id in enumerate(results["ids"][0]):
+            meta = results["metadatas"][0][i]
+            distance = results["distances"][0][i]
+            doc = results["documents"][0][i]
+            chunk_type = meta.get('type', '')
 
             result_item = {
                 'type': chunk_type,
                 'distance': round(distance, 3),
-                'description': row.get('description', ''),
+                'description': meta.get('description', ''),
             }
 
             # 根据类型添加不同的字段
             if chunk_type == 'class_summary':
                 result_item.update({
-                    'class_name': row.get('class_name', ''),
-                    'method_count': row.get('method_count', ''),
-                    'key_methods': row.get('key_methods', ''),
-                    'responsibility': row.get('responsibility', ''),
-                    'content': row.get('text', ''),
+                    'class_name': meta.get('class_name', ''),
+                    'key_methods': meta.get('key_methods', ''),
+                    'responsibility': meta.get('responsibility', ''),
                 })
             elif chunk_type == 'module_summary':
                 result_item.update({
-                    'module_name': row.get('module_name', ''),
-                    'file_count': row.get('file_count', ''),
-                    'class_count': row.get('class_count', ''),
-                    'entry_points': row.get('entry_points', ''),
-                    'key_classes': row.get('key_classes', ''),
-                    'content': row.get('text', ''),
+                    'module_name': meta.get('module_name', ''),
+                    'entry_points': meta.get('entry_points', ''),
+                    'key_classes': meta.get('key_classes', ''),
                 })
             else:
-                # 函数/方法
+                # 函数/方法 — 只返回定位信息，不返回代码片段
                 result_item.update({
-                    'file': row.get('file', ''),
-                    'line': row.get('line', ''),
-                    'function': row.get('function', ''),
-                    'class': row.get('struct', ''),
-                    'module': row.get('module', ''),
-                    'action': row.get('action', ''),
-                    'code_preview': row.get('text', '')[:800],
+                    'file': meta.get('file', ''),
+                    'line': meta.get('line', ''),
+                    'function': meta.get('function', ''),
+                    'class': meta.get('struct', ''),
                 })
 
             output.append(result_item)
 
-        return json.dumps(output, ensure_ascii=False, indent=2)
+        return json.dumps(output, ensure_ascii=False)
+
+    def _search_raw(self, query_text, where_filter=None, n_results=10):
+        """搜索并返回带完整元数据的原始结果"""
+        embedding = self._embed_query(query_text)
+
+        kwargs = {
+            "query_embeddings": [embedding],
+            "n_results": n_results,
+        }
+        if where_filter:
+            kwargs["where"] = where_filter
+
+        results = self.collection.query(**kwargs)
+
+        if not results["ids"][0]:
+            return []
+
+        output = []
+        for i, doc_id in enumerate(results["ids"][0]):
+            meta = results["metadatas"][0][i]
+            distance = results["distances"][0][i]
+
+            output.append({
+                'file': meta.get('file', ''),
+                'line': meta.get('line', ''),
+                'function': meta.get('function', ''),
+                'class': meta.get('struct', ''),
+                'description': meta.get('description', ''),
+                'distance': round(distance, 3),
+                '_meta': dict(meta),
+            })
+
+        return output
 
     def find_function(self, module="", action="", target="", keyword=""):
-        """按模块/动作/对象精确过滤"""
-        conditions = []
-        if module:
-            conditions.append({'module': module})
-        if action:
-            conditions.append({'action': action})
-        if target:
-            conditions.append({'target': target})
-
-        where = None
-        if len(conditions) > 1:
-            where = {'$and': conditions}
-        elif conditions:
-            where = conditions[0]
-
+        """向后兼容：映射到 search_by_type"""
         query = keyword or f"{action} {target}"
-        return self._search(query, where, n_results=5)
+        return self.search_by_type(query, module=module, action=action, target=target)
 
     def find_by_struct(self, struct_name, method_filter=""):
         """按类名过滤"""
         where = {'struct': struct_name}
         query = f"{struct_name} {method_filter}".strip()
-        return self._search(query, where, n_results=20)
+        return self._search(query, where, n_results=5)
 
     def find_by_pattern(self, pattern_type, module=""):
         """
         按代码模式查找。
-        patterns 存的是逗号分隔字符串，LanceDB 不支持 LIKE 搜索，
+        patterns 存的是逗号分隔字符串，ChromaDB 不支持 LIKE 搜索，
         所以先扩大搜索范围，再在 Python 侧按 patterns 过滤。
         """
         where = None
@@ -145,7 +146,7 @@ class RAGSearcher:
         results_raw = self._search_raw(pattern_type, where, n_results=30)
 
         if not results_raw:
-            return json.dumps({"error": "未找到结果"}, ensure_ascii=False, indent=2)
+            return json.dumps({"error": "未找到结果"}, ensure_ascii=False)
 
         # Python 侧过滤 patterns
         filtered = []
@@ -158,14 +159,14 @@ class RAGSearcher:
         if not filtered:
             filtered = results_raw
 
-        # 最多返回10条
-        filtered = filtered[:10]
+        # 最多返回5条
+        filtered = filtered[:5]
 
         # 清理内部字段
         for item in filtered:
             item.pop('_meta', None)
 
-        return json.dumps(filtered, ensure_ascii=False, indent=2)
+        return json.dumps(filtered, ensure_ascii=False)
 
     def find_config(self, name, type_filter=""):
         """查找配置/数据结构"""
@@ -200,41 +201,16 @@ class RAGSearcher:
             where = {'type': 'module_summary'}
         return self._search(f"{module_name} 模块流程入口", where, n_results=5)
 
-    def search_by_type(self, query, chunk_type="", n_results=5):
-        """按类型搜索（function/class_summary/module_summary）"""
-        where = None
+    def search_by_type(self, query, chunk_type="", module="", action="", target="", n_results=5):
+        """按类型搜索（function/class_summary/module_summary），支持精确过滤"""
+        conditions = {}
         if chunk_type:
-            where = {'type': chunk_type}
+            conditions['type'] = chunk_type
+        if module:
+            conditions['module'] = module
+        if action:
+            conditions['action'] = action
+        if target:
+            conditions['target'] = target
+        where = conditions if conditions else None
         return self._search(query, where, n_results=n_results)
-
-    def _search_raw(self, query_text, where_filter=None, n_results=10):
-        """搜索并返回带完整元数据的原始结果"""
-        embedding = self._embed_query(query_text)
-
-        query = self.table.search(embedding).metric('cosine').limit(n_results)
-
-        where_clause = self._build_where_clause(where_filter)
-        if where_clause:
-            query = query.where(where_clause, prefilter=True)
-
-        results = query.to_list()
-
-        if not results:
-            return []
-
-        output = []
-        for row in results:
-            output.append({
-                'file': row.get('file', ''),
-                'line': row.get('line', ''),
-                'function': row.get('function', ''),
-                'class': row.get('struct', ''),
-                'module': row.get('module', ''),
-                'action': row.get('action', ''),
-                'description': row.get('description', ''),
-                'distance': round(row['_distance'], 3),
-                'code_preview': row.get('text', '')[:800],
-                '_meta': {k: v for k, v in row.items() if k not in ('_distance', 'vector', 'text')},
-            })
-
-        return output
