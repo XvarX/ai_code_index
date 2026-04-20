@@ -10,7 +10,6 @@ search_test.py - 交互式向量搜索测试
 import json
 import os
 import chromadb
-from openai import OpenAI
 import yaml
 
 # 加载配置
@@ -18,10 +17,17 @@ with open('config.yaml', encoding='utf-8') as f:
     config = yaml.safe_load(f)
 
 # 初始化
-embed_client = OpenAI(
-    api_key=config['embedding']['api_key'],
-    base_url=config['embedding']['base_url'],
-)
+mode = config.get('embedding', {}).get('mode', 'api')
+
+if mode == 'api':
+    from openai import OpenAI
+    embed_client = OpenAI(
+        api_key=config['embedding']['api_key'],
+        base_url=config['embedding']['base_url'],
+    )
+else:
+    embed_client = None
+
 db_client = chromadb.PersistentClient(path=os.path.join('data', 'chroma_db'))
 collection = db_client.get_or_create_collection(
     name="game_server_code",
@@ -29,6 +35,7 @@ collection = db_client.get_or_create_collection(
 )
 
 print(f"知识库中共 {collection.count()} 条记录")
+print(f"Embedding 模式: {mode}")
 print("输入搜索文本（输入 q 退出）\n")
 
 
@@ -43,22 +50,23 @@ def build_where(module=None, action=None):
 
 
 def search(query, module=None, action=None, n=5):
-    # 向量化查询
-    resp = embed_client.embeddings.create(
-        model=config['embedding']['model'],
-        input=[query],
-    )
-    embedding = resp.data[0].embedding
-
-    # 构建过滤条件
     where = build_where(module, action)
 
     kwargs = {
-        "query_embeddings": [embedding],
         "n_results": n,
     }
     if where:
         kwargs["where"] = where
+
+    if mode == 'local':
+        kwargs["query_texts"] = [query]
+    else:
+        resp = embed_client.embeddings.create(
+            model=config['embedding']['model'],
+            input=[query],
+        )
+        embedding = resp.data[0].embedding
+        kwargs["query_embeddings"] = [embedding]
 
     return collection.query(**kwargs)
 
@@ -98,7 +106,6 @@ while True:
     if not query:
         continue
 
-    # 支持格式: module:xxx action:xxx 搜索文本
     module = None
     action = None
     parts = query.split()

@@ -5,7 +5,26 @@
       "Bash(python check_setup.py)",
       "Bash(pip install *)",
       "Bash(python build/build_all.py)",
-      "Bash(python -c ' *)"
+      "Bash(python -c ' *)",
+      "Bash(python -c \"from chromadb.utils.embedding_functions import DefaultEmbeddingFunction; fn = DefaultEmbeddingFunction\\(\\); fn\\(['test']\\); print\\('OK'\\)\")",
+      "Bash(python -c \"from chromadb.utils.embedding_functions import DefaultEmbeddingFunction; fn = DefaultEmbeddingFunction\\(\\); result = fn\\(['test']\\); print\\(f'OK, dim={len\\(result[0]\\)}'\\)\")",
+      "Read(//c/Users/yexan/.cache/chroma/onnx_models/all-MiniLM-L6-v2/**)",
+      "Bash(python -c \"from chromadb.utils.embedding_functions.onnx_mini_lm_l6_v2 import ONNXMiniLM_L6_V2; print\\(ONNXMiniLM_L6_V2.MODEL_DOWNLOAD_URL\\)\")",
+      "Bash(curl -L -C - -o \"C:\\\\Users\\\\yexan\\\\.cache\\\\chroma\\\\onnx_models\\\\all-MiniLM-L6-v2\\\\onnx.tar.gz\" \"https://chroma-onnx-models.s3.amazonaws.com/all-MiniLM-L6-v2/onnx.tar.gz\" --retry 5 --retry-delay 3 --connect-timeout 30 --max-time 300)",
+      "WebSearch",
+      "Bash(pip show *)",
+      "Bash(curl -s \"https://modelscope.cn/api/v1/models/Xenova/all-MiniLM-L6-v2/repo?Revision=master&NodePath=&listObjects=true\")",
+      "Bash(curl -s \"https://modelscope.cn/api/v1/models/Xenova/all-MiniLM-L6-v2/repo?Revision=master&NodePath=onnx&listObjects=true\")",
+      "Bash(curl -s \"https://modelscope.cn/api/v1/models/Xenova/all-MiniLM-L6-v2/repo/files?Revision=master\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d, indent=2\\)\\)\")",
+      "Bash(curl -s \"https://huggingface.co/api/models/Xenova/all-MiniLM-L6-v2\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); [print\\(f'{s[\\\\\"rfilename\\\\\"]:45s} {s[\\\\\"size\\\\\"]:,} bytes'\\) for s in d.get\\('siblings',[]\\)]\")",
+      "Bash(curl -s \"https://modelscope.cn/api/v1/models/Xenova/all-MiniLM-L6-v2/repo?Revision=master&Path=config.json\")",
+      "Bash(curl -s --connect-timeout 10 --max-time 30 \"https://modelscope.cn/api/v1/models/Xenova/all-MiniLM-L6-v2/repo?Revision=master&FilePath=config.json\")",
+      "Bash(curl -s --connect-timeout 10 --max-time 30 \"https://modelscope.cn/api/v1/models/Xenova/all-MiniLM-L6-v2/repo/files?Revision=master\")",
+      "Bash(curl -s --connect-timeout 10 --max-time 30 \"https://modelscope.cn/api/v1/models/Xenova/all-MiniLM-L6-v2/repo/list?Revision=master\")",
+      "Bash(curl -s --connect-timeout 10 --max-time 30 \"https://modelscope.cn/api/v1/models/Xenova/all-MiniLM-L6-v2/tree?Revision=master\")",
+      "Bash(curl -s --connect-timeout 10 --max-time 30 \"https://modelscope.cn/api/v1/models/Xenova/all-MiniLM-L6-v2/repo/files?Revision=master&Path=onnx\")"
     ]
   }
 }

@@ -40,6 +40,7 @@ chunking:
   max_tokens: 1500
 
 embedding:
+  mode: "api"          # "api" = 调用远程向量模型, "local" = ChromaDB 内置本地模型 (all-MiniLM-L6-v2)
   provider: "glm"
   model: "embedding-3"
   base_url: "https://open.bigmodel.cn/api/paas/v4"

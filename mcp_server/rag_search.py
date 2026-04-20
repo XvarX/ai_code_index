@@ -1,12 +1,12 @@
 """
 rag_search.py - RAG查询实现
-结构化查询 + 语义搜索（通过 Embedding API）
+结构化查询 + 语义搜索
+支持两种 embedding 模式: api (远程向量模型) / local (ChromaDB 内置)
 """
 
 import json
 import os
 import chromadb
-from openai import OpenAI
 
 
 class RAGSearcher:
@@ -21,13 +21,21 @@ class RAGSearcher:
             metadata={"hnsw:space": "cosine"},
         )
 
-        self.embed_client = OpenAI(
-            api_key=config['embedding'].get('api_key') or os.getenv('OPENAI_API_KEY'),
-            base_url=config['embedding']['base_url'],
-        )
-        self.embed_model = config['embedding']['model']
+        self.mode = config.get('embedding', {}).get('mode', 'api')
+
+        if self.mode == 'api':
+            from openai import OpenAI
+            self.embed_client = OpenAI(
+                api_key=config['embedding'].get('api_key') or os.getenv('OPENAI_API_KEY'),
+                base_url=config['embedding']['base_url'],
+            )
+            self.embed_model = config['embedding']['model']
+        else:
+            self.embed_client = None
+            self.embed_model = None
 
     def _embed_query(self, text):
+        """向量化查询文本（仅 api 模式）"""
         resp = self.embed_client.embeddings.create(
             model=self.embed_model,
             input=[text],
@@ -35,14 +43,17 @@ class RAGSearcher:
         return resp.data[0].embedding
 
     def _search(self, query_text, where_filter=None, n_results=5):
-        embedding = self._embed_query(query_text)
-
         kwargs = {
-            "query_embeddings": [embedding],
             "n_results": n_results,
         }
         if where_filter:
             kwargs["where"] = where_filter
+
+        if self.mode == 'local':
+            kwargs["query_texts"] = [query_text]
+        else:
+            embedding = self._embed_query(query_text)
+            kwargs["query_embeddings"] = [embedding]
 
         results = self.collection.query(**kwargs)
 
@@ -53,7 +64,6 @@ class RAGSearcher:
         for i, doc_id in enumerate(results["ids"][0]):
             meta = results["metadatas"][0][i]
             distance = results["distances"][0][i]
-            doc = results["documents"][0][i]
             chunk_type = meta.get('type', '')
 
             result_item = {
@@ -62,7 +72,6 @@ class RAGSearcher:
                 'description': meta.get('description', ''),
             }
 
-            # 根据类型添加不同的字段
             if chunk_type == 'class_summary':
                 result_item.update({
                     'class_name': meta.get('class_name', ''),
@@ -76,7 +85,6 @@ class RAGSearcher:
                     'key_classes': meta.get('key_classes', ''),
                 })
             else:
-                # 函数/方法 — 只返回定位信息，不返回代码片段
                 result_item.update({
                     'file': meta.get('file', ''),
                     'line': meta.get('line', ''),
@@ -90,14 +98,17 @@ class RAGSearcher:
 
     def _search_raw(self, query_text, where_filter=None, n_results=10):
         """搜索并返回带完整元数据的原始结果"""
-        embedding = self._embed_query(query_text)
-
         kwargs = {
-            "query_embeddings": [embedding],
             "n_results": n_results,
         }
         if where_filter:
             kwargs["where"] = where_filter
+
+        if self.mode == 'local':
+            kwargs["query_texts"] = [query_text]
+        else:
+            embedding = self._embed_query(query_text)
+            kwargs["query_embeddings"] = [embedding]
 
         results = self.collection.query(**kwargs)
 
@@ -142,27 +153,22 @@ class RAGSearcher:
         if module:
             where = {'module': module}
 
-        # 多搜一些，后面过滤
         results_raw = self._search_raw(pattern_type, where, n_results=30)
 
         if not results_raw:
             return json.dumps({"error": "未找到结果"}, ensure_ascii=False)
 
-        # Python 侧过滤 patterns
         filtered = []
         for item in results_raw:
             patterns = item['_meta'].get('patterns', '')
             if pattern_type in patterns:
                 filtered.append(item)
 
-        # 如果过滤后为空，返回原始结果（降级为纯语义匹配）
         if not filtered:
             filtered = results_raw
 
-        # 最多返回5条
         filtered = filtered[:5]
 
-        # 清理内部字段
         for item in filtered:
             item.pop('_meta', None)
 

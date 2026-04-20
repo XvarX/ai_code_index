@@ -1,23 +1,29 @@
 """
 embedder.py - 向量化入库
-通过 OpenAI 兼容 API 调用向量模型生成 Embedding，存入 ChromaDB
+支持两种模式:
+  - api: 通过 OpenAI 兼容 API 调用远程向量模型
+  - local: 使用 ChromaDB 内置的本地 Embedding (all-MiniLM-L6-v2)
 """
 
 import os
 import chromadb
-from openai import OpenAI
+
+
+def _get_embed_mode(config):
+    return config.get('embedding', {}).get('mode', 'api')
 
 
 def get_embedding_client(config):
-    """创建 Embedding API 客户端"""
+    """创建 Embedding API 客户端（仅 api 模式使用）"""
     base_url = config['embedding']['base_url']
     api_key = config['embedding'].get('api_key') or os.getenv('OPENAI_API_KEY')
-    print(f"  [Embedding] 连接 {base_url}")
+    print(f"  [Embedding] 模式=api, 连接 {base_url}")
+    from openai import OpenAI
     return OpenAI(api_key=api_key, base_url=base_url)
 
 
 def batch_embed(client, model, texts, batch_size=16):
-    """分批调用 Embedding API"""
+    """分批调用 Embedding API（仅 api 模式使用）"""
     all_embeddings = []
     total = len(texts)
 
@@ -41,24 +47,10 @@ def batch_embed(client, model, texts, batch_size=16):
     return all_embeddings
 
 
-def embed_and_store(chunks, config):
-    db_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'chroma_db')
-    db_client = chromadb.PersistentClient(path=db_path)
-
-    # 每次构建覆盖旧数据
-    try:
-        db_client.delete_collection("game_server_code")
-        print("  已清除旧数据")
-    except Exception:
-        pass
-
-    embed_client = get_embedding_client(config)
-    model = config['embedding']['model']
-
+def _build_rows(chunks):
+    """从 chunks 构建统一的入库行数据"""
     rows = []
-
     for chunk in chunks:
-        # 根据不同类型选择文本
         chunk_type = chunk.get('type', '')
 
         if chunk_type == 'class_summary':
@@ -88,21 +80,18 @@ def embed_and_store(chunks, config):
         if isinstance(patterns, list):
             patterns = ','.join(patterns)
 
-        # ID 格式：type:file:line 或 type:name
         if chunk_type in ('class_summary', 'module_summary'):
             chunk_id = f"{chunk_type}:{chunk.get('name', chunk['file'])}"
         else:
             chunk_id = f"{chunk['file']}:{chunk['start_line']}"
 
-        # 构建统一 schema 的行（所有字段都包含，不用的填空字符串）
         row = {
             'id': chunk_id,
             'text': doc_text,
-            'vector': None,  # 填充后设置
-            # 通用元数据
+            'vector': None,
             'module': tags.get('module') or chunk.get('module_name', '') or '',
-            'action': tags.get('action', '') or '',
-            'target': tags.get('target', '') or '',
+            'action': tags.get('action') or '',
+            'target': tags.get('target') or '',
             'struct': tags.get('struct') or chunk.get('class_name') or '',
             'function': tags.get('function') or chunk.get('name') or '',
             'file': chunk.get('file', ''),
@@ -110,12 +99,10 @@ def embed_and_store(chunks, config):
             'type': chunk_type,
             'description': chunk.get('description', ''),
             'patterns': patterns or '',
-            # 类概述字段
             'class_name': '',
             'method_count': '',
             'key_methods': '',
             'responsibility': '',
-            # 模块概述字段
             'module_name': '',
             'file_count': '',
             'class_count': '',
@@ -123,7 +110,6 @@ def embed_and_store(chunks, config):
             'key_classes': '',
         }
 
-        # 填充类型特定字段
         if chunk_type == 'class_summary':
             row['class_name'] = chunk.get('class_name', '')
             row['method_count'] = str(chunk.get('method_count', 0))
@@ -138,38 +124,82 @@ def embed_and_store(chunks, config):
             row['key_classes'] = ','.join(chunk.get('key_classes', []))
 
         rows.append(row)
+    return rows
 
-    # 调用 Embedding API
-    print(f"  开始向量化 {len(rows)} 条文本...")
-    embeddings = batch_embed(embed_client, model, [r['text'] for r in rows])
 
-    # 填充向量
-    for row, emb in zip(rows, embeddings):
-        row['vector'] = emb
-
-    # 入库（分批添加，ChromaDB 限制最大批次 5461）
-    collection = db_client.get_or_create_collection(
+def _get_or_create_collection(db_client, mode):
+    """获取或创建 collection，local 模式使用默认 embedding function"""
+    if mode == 'local':
+        return db_client.get_or_create_collection(
+            name="game_server_code",
+            metadata={"hnsw:space": "cosine"},
+        )
+    return db_client.get_or_create_collection(
         name="game_server_code",
         metadata={"hnsw:space": "cosine"},
     )
 
-    max_batch_size = 5461
-    total = len(rows)
-    for i in range(0, total, max_batch_size):
-        batch = rows[i:i + max_batch_size]
-        collection.add(
-            ids=[r['id'] for r in batch],
-            documents=[r['text'] for r in batch],
-            embeddings=[r['vector'] for r in batch],
-            metadatas=[{k: v for k, v in r.items() if k not in ('id', 'text', 'vector')} for r in batch],
-        )
-        print(f"  已添加 {min(i + max_batch_size, total)}/{total} 条记录")
+
+def embed_and_store(chunks, config):
+    db_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'chroma_db')
+    db_client = chromadb.PersistentClient(path=db_path)
+
+    try:
+        db_client.delete_collection("game_server_code")
+        print("  已清除旧数据")
+    except Exception:
+        pass
+
+    mode = _get_embed_mode(config)
+    rows = _build_rows(chunks)
+
+    collection = _get_or_create_collection(db_client, mode)
+
+    # 准备公共参数
+    ids = [r['id'] for r in rows]
+    documents = [r['text'] for r in rows]
+    metadatas = [{k: v for k, v in r.items() if k not in ('id', 'text', 'vector')} for r in rows]
+
+    if mode == 'local':
+        print(f"  [Embedding] 模式=local, 使用 ChromaDB 内置 Embedding")
+        print(f"  开始向量化 {len(rows)} 条文本 (ChromaDB 自动计算)...")
+        max_batch_size = 5461
+        total = len(rows)
+        for i in range(0, total, max_batch_size):
+            batch_ids = ids[i:i + max_batch_size]
+            batch_docs = documents[i:i + max_batch_size]
+            batch_metas = metadatas[i:i + max_batch_size]
+            collection.add(
+                ids=batch_ids,
+                documents=batch_docs,
+                metadatas=batch_metas,
+            )
+            print(f"  已添加 {min(i + max_batch_size, total)}/{total} 条记录")
+    else:
+        embed_client = get_embedding_client(config)
+        model = config['embedding']['model']
+        print(f"  开始向量化 {len(rows)} 条文本...")
+        embeddings = batch_embed(embed_client, model, documents)
+
+        max_batch_size = 5461
+        total = len(rows)
+        for i in range(0, total, max_batch_size):
+            batch_ids = ids[i:i + max_batch_size]
+            batch_docs = documents[i:i + max_batch_size]
+            batch_embs = embeddings[i:i + max_batch_size]
+            batch_metas = metadatas[i:i + max_batch_size]
+            collection.add(
+                ids=batch_ids,
+                documents=batch_docs,
+                embeddings=batch_embs,
+                metadatas=batch_metas,
+            )
+            print(f"  已添加 {min(i + max_batch_size, total)}/{total} 条记录")
 
     # 验证
     count = collection.count()
     print(f"  入库完成: ChromaDB中共 {count} 条记录")
 
-    # 统计各类型数量
     type_stats = {}
     for row in rows:
         t = row.get('type', 'unknown')
@@ -182,10 +212,8 @@ def embed_and_store(chunks, config):
 def get_collection(config):
     db_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'chroma_db')
     db_client = chromadb.PersistentClient(path=db_path)
-    return db_client.get_or_create_collection(
-        name="game_server_code",
-        metadata={"hnsw:space": "cosine"},
-    )
+    mode = _get_embed_mode(config)
+    return _get_or_create_collection(db_client, mode)
 
 
 if __name__ == '__main__':
@@ -193,14 +221,12 @@ if __name__ == '__main__':
     import yaml
     import os
 
-    # 加载配置
     config_path = os.path.join(os.path.dirname(__file__), '..', 'config.yaml')
     with open(config_path, encoding='utf-8') as f:
         config = yaml.safe_load(f)
 
     data_dir = os.path.join(os.path.dirname(__file__), '..', 'data')
 
-    # 加载所有 chunks（函数 + 类 + 模块）
     with open(os.path.join(data_dir, 'described_chunks.json'), 'r', encoding='utf-8') as f:
         chunks = json.load(f)
 
@@ -210,11 +236,9 @@ if __name__ == '__main__':
     with open(os.path.join(data_dir, 'module_summaries.json'), 'r', encoding='utf-8') as f:
         module_summaries = json.load(f)
 
-    # 合并所有 chunks
     all_chunks = chunks + class_summaries + module_summaries
 
     print(f"加载了 {len(chunks)} 个函数, {len(class_summaries)} 个类, {len(module_summaries)} 个模块")
     print(f"总共 {len(all_chunks)} 条记录准备入库...")
 
-    # 向量化入库
     embed_and_store(all_chunks, config)
