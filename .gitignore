@@ -55,4 +55,5 @@ testhd/.claude/settings.local.json
 pip.ini
 pip.conf
 
+*.yaml
 config.yaml
