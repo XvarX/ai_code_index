@@ -102,7 +102,7 @@ module_analysis:
 
 ## Agent 使用指南
 
-详见 [testhd/.claude/CLAUDE.md](testhd/.claude/CLAUDE.md)
+详见项目根目录 [CLAUDE.md](CLAUDE.md)
 
 **核心原则**：
 1. 从模糊到精确的查询策略

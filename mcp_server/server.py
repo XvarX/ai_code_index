@@ -138,33 +138,33 @@ async def list_tools() -> list[Tool]:
         # 第一层：符号搜索（精确、零 API 调用）
         create_tool(
             "search_symbol",
-            "按名称搜索符号定义（类名/函数名），比 RAG 更快更精确",
+            "按名称搜索符号定义。优先使用精确格式 ClassName.method_name（如 MonsterManager.spawn_monster），不确定所属类时才用纯方法名（如 spawn_monster）进行模糊匹配。搜索类名直接输入（如 MonsterManager）。返回：符号名、文件路径、行号（1-based）、类型。",
             {
                 "type": "object",
                 "properties": {
-                    "name": {"type": "string", "description": "符号名（类名/函数名/方法名）"},
+                    "name": {"type": "string", "description": "符号名，支持: 类名(MonsterManager)、类.方法(MonsterManager.spawn_monster)、纯方法名(spawn_monster)"},
                     "kind": {"type": "string", "description": "类型过滤: class/method/function", "default": ""}
                 }
             }
         ),
         create_tool(
             "list_symbols",
-            "列出文件中的所有类和方法",
+            "[备用] 列出文件中所有类和方法定义。大多数场景直接 Read 文件即可。仅用于超大文件的结构速览。",
             {
                 "type": "object",
                 "properties": {
-                    "file": {"type": "string", "description": "文件路径"},
+                    "file": {"type": "string", "description": "文件相对路径，如 gameplay/monster.py"},
                     "kind": {"type": "string", "description": "类型过滤: class/method/function", "default": ""}
                 }
             }
         ),
         create_tool(
             "module_overview",
-            "列出模块中的所有类和顶层函数",
+            "列出模块中所有类和顶层函数，适合快速了解模块结构。返回：类列表和函数列表（含文件路径和行号）。",
             {
                 "type": "object",
                 "properties": {
-                    "module_path": {"type": "string", "description": "模块路径，如 testhd/gameplay"}
+                    "module_path": {"type": "string", "description": "模块路径（相对项目根），如 gameplay 或 gameplay/monster"}
                 }
             }
         ),
@@ -182,36 +182,36 @@ async def list_tools() -> list[Tool]:
         # 第二层：代码导航（SCIP 精确定位）
         create_tool(
             "goto_definition",
-            "精确跳转到定义。",
+            "[备用] 根据文件位置跳转到符号定义处。日常用 search_symbol(name) 即可。仅当多个同名符号需要按上下文消歧时使用。输入：file（相对路径如 gameplay/monster.py）、line（1-based）。",
             {
                 "type": "object",
                 "properties": {
-                    "file": {"type": "string"},
-                    "line": {"type": "integer"},
-                    "column": {"type": "integer", "default": 0}
+                    "file": {"type": "string", "description": "文件相对路径，如 gameplay/monster.py"},
+                    "line": {"type": "integer", "description": "行号（1-based）"},
+                    "column": {"type": "integer", "description": "列号（0-based，可选）", "default": 0}
                 }
             }
         ),
         create_tool(
             "find_references",
-            "查找所有引用。",
+            "查找符号在项目中的所有引用位置。用于评估改动影响范围。输入：file（相对路径）和 line（1-based）。返回所有引用的 file:line 列表。",
             {
                 "type": "object",
                 "properties": {
-                    "file": {"type": "string"},
-                    "line": {"type": "integer"}
+                    "file": {"type": "string", "description": "文件相对路径，如 gameplay/monster.py"},
+                    "line": {"type": "integer", "description": "行号（1-based）"}
                 }
             }
         ),
         create_tool(
             "get_call_chain",
-            "获取调用链。",
+            "获取函数的调用链（上下游关系）。用于追踪数据流和理解模块间依赖。输入：file（相对路径）和 line（1-based），direction: outgoing=它调用了谁, incoming=谁调用了它。",
             {
                 "type": "object",
                 "properties": {
-                    "file": {"type": "string"},
-                    "line": {"type": "integer"},
-                    "direction": {"type": "string", "default": "outgoing"}
+                    "file": {"type": "string", "description": "文件相对路径，如 gameplay/monster.py"},
+                    "line": {"type": "integer", "description": "行号（1-based）"},
+                    "direction": {"type": "string", "description": "outgoing=它调用了谁, incoming=谁调用了它", "default": "outgoing"}
                 }
             }
         ),
@@ -244,11 +244,13 @@ async def list_tools() -> list[Tool]:
         ),
         create_tool(
             "search_by_type",
-            "语义搜索代码。输入自然语言查询，返回相关代码块。注意：返回的是已有代码的描述，仅用于理解架构，不要照搬模块名或类名到新代码中。",
+            "语义搜索代码。输入自然语言查询，返回相关代码块。支持按 chunk_type 和 module 过滤结果。注意：返回的是已有代码的描述，仅用于理解架构，不要照搬模块名或类名到新代码中。",
             {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "自然语言搜索查询"},
+                    "query": {"type": "string", "description": "自然语言搜索查询，如: 怪物管理、定时任务"},
+                    "chunk_type": {"type": "string", "description": "结果类型过滤: function/class_summary/module_summary，留空搜索所有类型", "default": ""},
+                    "module": {"type": "string", "description": "模块名过滤（如 monster、scene），留空搜索所有模块", "default": ""},
                     "n_results": {"type": "integer", "default": 5}
                 }
             }
@@ -310,6 +312,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         elif name == "search_by_type":
             result = rag.search_by_type(
                 arguments.get("query", ""),
+                chunk_type=arguments.get("chunk_type", ""),
+                module=arguments.get("module", ""),
                 n_results=arguments.get("n_results", 5)
             )
         # 已废弃工具（保留兼容）

@@ -319,6 +319,13 @@ class SCIPIndex:
         # 普通相对路径: gameplay/box.py -> gameplay\\box.py
         return file_path.replace('/', os.sep)
 
+    @staticmethod
+    def _to_output_path(file_path):
+        """将内部路径转为输出格式（正斜杠）"""
+        if not file_path:
+            return file_path
+        return file_path.replace(os.sep, '/')
+
     def _build_call_graphs(self):
         """从函数范围构建调用图
 
@@ -421,7 +428,7 @@ class SCIPIndex:
         locations = []
         for occ in occs:
             # 1-based line
-            locations.append(f"{occ['file']}:{occ['line'] + 1}")
+            locations.append(f"{self._to_output_path(occ['file'])}:{occ['line'] + 1}")
 
         if not locations:
             return json.dumps({"error": "未找到引用"}, ensure_ascii=False)
@@ -444,12 +451,11 @@ class SCIPIndex:
         for callee_sym in callees:
             defn = self.definitions.get(callee_sym)
             if defn:
-                # 提取简短名称
-                name = callee_sym.split('(')[0].split('.')[-1] if callee_sym else '?'
+                short_name, _ = self._extract_short_name(callee_sym)
                 result.append({
-                    "file": defn['file'],
+                    "file": self._to_output_path(defn['file']),
                     "line": defn['line'] + 1,  # 1-based
-                    "name": name,
+                    "name": short_name or callee_sym.split('/')[-1].split('#')[-1].rstrip('.'),
                 })
 
         if not result:
@@ -480,12 +486,26 @@ class SCIPIndex:
         return dict(graph)
 
     def search_symbol(self, name: str, kind: str = "") -> str:
-        """按短名搜索符号定义（类名/函数名），比 RAG 更快更精确"""
+        """按短名搜索符号定义（类名/函数名），比 RAG 更快更精确
+
+        支持三种搜索方式：
+        1. 精确匹配: search_symbol("MonsterManager") -> 类
+        2. 类.方法: search_symbol("MonsterManager.spawn_monster") -> 方法
+        3. 纯方法名: search_symbol("spawn_monster") -> 模糊匹配所有 ClassName.spawn_monster
+        """
         symbols = self.name_to_symbols.get(name, [])
+        # 精确匹配失败时，尝试按方法名后缀模糊匹配
+        if not symbols and '.' not in name:
+            suffix = '.' + name
+            for key in self.name_to_symbols:
+                if key.endswith(suffix):
+                    symbols.extend(self.name_to_symbols[key])
+
         if not symbols:
             return json.dumps({"error": f"未找到符号: {name}"}, ensure_ascii=False)
 
         useful_kinds = {'class', 'method', 'function'}
+        seen = set()
         results = []
         for sym in symbols:
             defn = self.definitions.get(sym)
@@ -496,9 +516,14 @@ class SCIPIndex:
                 continue
             if not kind and sym_kind not in useful_kinds:
                 continue
+            # 按 file+line 去重（SCIP 可能对同一符号产生多个 occurrence）
+            key = (defn['file'], defn['line'])
+            if key in seen:
+                continue
+            seen.add(key)
             results.append({
                 "name": short_name or name,
-                "file": defn['file'],
+                "file": self._to_output_path(defn['file']),
                 "line": defn['line'] + 1,
                 "kind": sym_kind,
             })
@@ -523,7 +548,7 @@ class SCIPIndex:
                 continue
             results.append({
                 "name": d['name'],
-                "file": file_normalized,
+                "file": self._to_output_path(file_normalized),
                 "line": d['line'] + 1,
                 "kind": d['kind'],
             })
@@ -544,13 +569,13 @@ class SCIPIndex:
                 if d['kind'] == 'class':
                     classes.append({
                         "name": d['name'],
-                        "file": file_path,
+                        "file": self._to_output_path(file_path),
                         "line": d['line'] + 1,
                     })
                 elif d['kind'] == 'function':
                     functions.append({
                         "name": d['name'],
-                        "file": file_path,
+                        "file": self._to_output_path(file_path),
                         "line": d['line'] + 1,
                     })
 
@@ -577,7 +602,7 @@ class SCIPIndex:
                     parent_name, _ = self._extract_short_name(parent)
                     results.append({
                         "parent": parent_name or parent,
-                        "file": defn['file'] if defn else "",
+                        "file": self._to_output_path(defn['file']) if defn else "",
                         "line": defn['line'] + 1 if defn else 0,
                     })
             else:
@@ -587,7 +612,7 @@ class SCIPIndex:
                     child_name, _ = self._extract_short_name(child_sym)
                     results.append({
                         "child": child_name or child_sym,
-                        "file": defn['file'] if defn else "",
+                        "file": self._to_output_path(defn['file']) if defn else "",
                         "line": defn['line'] + 1 if defn else 0,
                     })
 

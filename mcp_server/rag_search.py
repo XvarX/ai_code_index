@@ -248,6 +248,16 @@ class RAGSearcher:
 
         return result
 
-    def search_by_type(self, query, n_results=5):
-        """语义搜索代码"""
-        return self._search(query, where=None, n_results=n_results)
+    def search_by_type(self, query, chunk_type="", module="", n_results=5):
+        """语义搜索代码，支持按类型和模块过滤"""
+        where_filter = None
+        conditions = []
+        if chunk_type:
+            conditions.append({'type': chunk_type})
+        if module:
+            conditions.append({'module': module})
+        if len(conditions) == 1:
+            where_filter = conditions[0]
+        elif len(conditions) == 2:
+            where_filter = {'$and': conditions}
+        return self._search(query, where_filter=where_filter, n_results=n_results)

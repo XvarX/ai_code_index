@@ -210,24 +210,30 @@ class MCPAgentSimulator:
         print("[MCP Agent] 交互模式")
         print("="*60)
         print("可用命令:")
-        print("  【函数层】")
-        print("  1. 查询代码: find_function <module> <action> <target> [keyword]")
-        print("  2. 查结构: find_by_struct <struct_name> [method_filter]")
-        print("  3. 查模式: find_by_pattern <pattern_type> [module]")
-        print("  【类层】")
-        print("  4. 查类概述: find_class_summary <class_name>")
-        print("  【模块层】")
-        print("  5. 查模块流程: find_module_summary <module_name>")
-        print("  6. 按类型搜索: search_by_type <query> <chunk_type> [n_results]")
+        print("  【第一层：符号搜索】")
+        print("  1. 按名称搜索: search_symbol <name> [kind]")
+        print("  2. 模块概览: module_overview <module_path>")
+        print("  3. 继承关系: find_inheritance <class_name> [direction]")
+        print("  【第二层：代码导航】")
+        print("  4. 查引用: find_references <file> <line>")
+        print("  5. 调用链: get_call_chain <file> <line> [direction]")
+        print("  6. 跳定义: goto_definition <file> <line> [column]")
+        print("  【第三层：语义搜索】")
+        print("  7. 语义搜索: search_by_type <query> [n_results]")
+        print("  8. 类概述: find_class_summary <class_name>")
+        print("  9. 模块概述: find_module_summary <module_name>")
         print("  【通用】")
-        print("  7. 列工具: list")
-        print("  8. 退出: quit/exit")
+        print("  10. 列工具: list")
+        print("  11. 退出: quit/exit")
         print("="*60)
         print("示例:")
-        print("  find_function scene create npc")
-        print("  find_class_summary SceneManager")
+        print("  search_symbol CMonster class")
+        print("  module_overview gameplay")
+        print("  find_references gameplay/monster.py 10")
+        print("  get_call_chain gameplay/monster.py 10 incoming")
+        print("  find_class_summary CMonster3")
         print("  find_module_summary gameplay/monster")
-        print("  search_by_type 怪物管理 class_summary")
+        print("  search_by_type 怪物管理")
         print("="*60)
 
         while True:
@@ -247,44 +253,60 @@ class MCPAgentSimulator:
                 if cmd == "list":
                     self.list_tools()
 
-                # ===== 函数层查询 =====
-                elif cmd == "find_function" and len(parts) >= 4:
-                    self.call_tool("find_function", {
-                        "module": parts[1],
-                        "action": parts[2],
-                        "target": parts[3],
-                        "keyword": parts[4] if len(parts) > 4 else ""
+                # ===== 第一层：符号搜索 =====
+                elif cmd == "search_symbol" and len(parts) >= 2:
+                    self.call_tool("search_symbol", {
+                        "name": parts[1],
+                        "kind": parts[2] if len(parts) > 2 else ""
                     })
 
-                elif cmd == "find_by_struct" and len(parts) >= 2:
-                    self.call_tool("find_by_struct", {
-                        "struct_name": parts[1],
-                        "method_filter": parts[2] if len(parts) > 2 else ""
+                elif cmd == "module_overview" and len(parts) >= 2:
+                    self.call_tool("module_overview", {
+                        "module_path": parts[1]
                     })
 
-                elif cmd == "find_by_pattern" and len(parts) >= 2:
-                    self.call_tool("find_by_pattern", {
-                        "pattern_type": parts[1],
-                        "module": parts[2] if len(parts) > 2 else ""
+                elif cmd == "find_inheritance" and len(parts) >= 2:
+                    self.call_tool("find_inheritance", {
+                        "name": parts[1],
+                        "direction": parts[2] if len(parts) > 2 else "parent"
                     })
 
-                # ===== 类层查询 =====
+                # ===== 第二层：代码导航 =====
+                elif cmd == "find_references" and len(parts) >= 3:
+                    self.call_tool("find_references", {
+                        "file": parts[1],
+                        "line": int(parts[2])
+                    })
+
+                elif cmd == "get_call_chain" and len(parts) >= 3:
+                    self.call_tool("get_call_chain", {
+                        "file": parts[1],
+                        "line": int(parts[2]),
+                        "direction": parts[3] if len(parts) > 3 else "outgoing"
+                    })
+
+                elif cmd == "goto_definition" and len(parts) >= 3:
+                    self.call_tool("goto_definition", {
+                        "file": parts[1],
+                        "line": int(parts[2]),
+                        "column": int(parts[3]) if len(parts) > 3 else 0
+                    })
+
+                # ===== 第三层：语义搜索 =====
+                elif cmd == "search_by_type" and len(parts) >= 2:
+                    self.call_tool("search_by_type", {
+                        "query": " ".join(parts[1:-1]) if len(parts) > 2 and parts[-1].isdigit() else " ".join(parts[1:]),
+                        "n_results": int(parts[-1]) if parts[-1].isdigit() else 5
+                    })
+
                 elif cmd == "find_class_summary" and len(parts) >= 2:
                     self.call_tool("find_class_summary", {
                         "class_name": parts[1]
                     })
 
-                # ===== 模块层查询 =====
                 elif cmd == "find_module_summary" and len(parts) >= 2:
                     self.call_tool("find_module_summary", {
                         "module_name": parts[1]
-                    })
-
-                elif cmd == "search_by_type" and len(parts) >= 2:
-                    self.call_tool("search_by_type", {
-                        "query": parts[1],
-                        "chunk_type": parts[2] if len(parts) > 2 else "",
-                        "n_results": int(parts[3]) if len(parts) > 3 else 5
                     })
 
                 else:

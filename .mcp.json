@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "game_server_rag": {
+      "command": "python",
+      "args": ["e:/space/labspace/ai_code_index/mcp_server/server.py"]
+    }
+  }
+}

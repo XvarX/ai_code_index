@@ -24,7 +24,14 @@
       "Bash(curl -s --connect-timeout 10 --max-time 30 \"https://modelscope.cn/api/v1/models/Xenova/all-MiniLM-L6-v2/repo/files?Revision=master\")",
       "Bash(curl -s --connect-timeout 10 --max-time 30 \"https://modelscope.cn/api/v1/models/Xenova/all-MiniLM-L6-v2/repo/list?Revision=master\")",
       "Bash(curl -s --connect-timeout 10 --max-time 30 \"https://modelscope.cn/api/v1/models/Xenova/all-MiniLM-L6-v2/tree?Revision=master\")",
-      "Bash(curl -s --connect-timeout 10 --max-time 30 \"https://modelscope.cn/api/v1/models/Xenova/all-MiniLM-L6-v2/repo/files?Revision=master&Path=onnx\")"
+      "Bash(curl -s --connect-timeout 10 --max-time 30 \"https://modelscope.cn/api/v1/models/Xenova/all-MiniLM-L6-v2/repo/files?Revision=master&Path=onnx\")",
+      "Bash(python -c \"import py_compile; py_compile.compile\\('mcp_server/rag_search.py', doraise=True\\); print\\('rag_search.py OK'\\)\")",
+      "Bash(python -c \"import py_compile; py_compile.compile\\('mcp_server/scip_index.py', doraise=True\\); print\\('scip_index.py OK'\\)\")",
+      "Bash(python -c \"import py_compile; py_compile.compile\\('mcp_server/server.py', doraise=True\\); print\\('server.py OK'\\)\")",
+      "Bash(python -c \"import py_compile; py_compile.compile\\('mcp_server/mcp_agent_simulator.py', doraise=True\\); print\\('simulator OK'\\)\")",
+      "Bash(python test_tools.py)",
+      "Bash(python -c \"import py_compile; py_compile.compile\\('mcp_server/server.py', doraise=True\\); py_compile.compile\\('mcp_server/scip_index.py', doraise=True\\); print\\('OK'\\)\")",
+      "Bash(python -c \"import py_compile; py_compile.compile\\('mcp_server/server.py', doraise=True\\); print\\('OK'\\)\")"
     ]
   }
 }

@@ -1,0 +1,316 @@
+{
+  "1_search_symbol_class": [
+    {
+      "name": "MonsterManager",
+      "file": "game/manager/monster_manager.py",
+      "line": 10,
+      "kind": "class"
+    }
+  ],
+  "2_search_symbol_method": [
+    {
+      "name": "MonsterManager.spawn_monster",
+      "file": "game/manager/monster_manager.py",
+      "line": 19,
+      "kind": "method"
+    }
+  ],
+  "3_search_symbol_notfound": {
+    "error": "未找到符号: NotExist"
+  },
+  "4_module_overview": {
+    "classes": [
+      {
+        "name": "MonsterManager",
+        "file": "game/manager/monster_manager.py",
+        "line": 10
+      },
+      {
+        "name": "SceneManager",
+        "file": "game/manager/scene_manager.py",
+        "line": 9
+      }
+    ],
+    "functions": []
+  },
+  "5_find_inheritance_notfound": {
+    "error": "未找到类: MonsterBase"
+  },
+  "6_goto_definition": [
+    {
+      "uri": "file:///E:/space/labspace/testserver/game/manager/monster_manager.py",
+      "range": {
+        "start": {
+          "line": 9,
+          "character": 6
+        },
+        "end": {
+          "line": 9,
+          "character": 26
+        }
+      }
+    }
+  ],
+  "7_find_references": [
+    "game/manager/monster_manager.py:10"
+  ],
+  "8_get_call_chain_out": [
+    {
+      "file": "game/manager/monster_manager.py",
+      "line": 45,
+      "name": "MonsterManager.get_monster"
+    }
+  ],
+  "9_get_call_chain_in": [],
+  "10_list_symbols": [
+    {
+      "name": "MonsterManager",
+      "file": "game/manager/monster_manager.py",
+      "line": 10,
+      "kind": "class"
+    },
+    {
+      "name": "MonsterManager.__init__",
+      "file": "game/manager/monster_manager.py",
+      "line": 13,
+      "kind": "method"
+    },
+    {
+      "name": "MonsterManager.config",
+      "file": "game/manager/monster_manager.py",
+      "line": 14,
+      "kind": "method"
+    },
+    {
+      "name": "MonsterManager.scene_mgr",
+      "file": "game/manager/monster_manager.py",
+      "line": 15,
+      "kind": "method"
+    },
+    {
+      "name": "MonsterManager.monsters",
+      "file": "game/manager/monster_manager.py",
+      "line": 16,
+      "kind": "method"
+    },
+    {
+      "name": "MonsterManager.spawn_counter",
+      "file": "game/manager/monster_manager.py",
+      "line": 17,
+      "kind": "method"
+    },
+    {
+      "name": "MonsterManager.spawn_monster",
+      "file": "game/manager/monster_manager.py",
+      "line": 19,
+      "kind": "method"
+    },
+    {
+      "name": "MonsterManager.spawn_boss",
+      "file": "game/manager/monster_manager.py",
+      "line": 32,
+      "kind": "method"
+    },
+    {
+      "name": "MonsterManager.get_monster",
+      "file": "game/manager/monster_manager.py",
+      "line": 45,
+      "kind": "method"
+    },
+    {
+      "name": "MonsterManager.remove_monster",
+      "file": "game/manager/monster_manager.py",
+      "line": 49,
+      "kind": "method"
+    },
+    {
+      "name": "MonsterManager.player_attack_monster",
+      "file": "game/manager/monster_manager.py",
+      "line": 58,
+      "kind": "method"
+    },
+    {
+      "name": "MonsterManager.respawn_all",
+      "file": "game/manager/monster_manager.py",
+      "line": 85,
+      "kind": "method"
+    }
+  ],
+  "11_search_by_type": [
+    {
+      "type": "class_overview",
+      "distance": 0.375,
+      "description": "管理全局怪物生成和销毁",
+      "file": "game/manager/monster_manager.py",
+      "line": "10",
+      "function": "MonsterManager (概览)",
+      "class": "MonsterManager"
+    },
+    {
+      "type": "class_summary",
+      "distance": 0.385,
+      "description": "管理全局怪物的生成、销毁、战斗交互和状态重置",
+      "class_name": "MonsterManager",
+      "key_methods": "spawn_monster,spawn_boss,player_attack_monster,remove_monster,respawn_all",
+      "responsibility": "负责游戏中所有怪物的生命周期管理，包括生成、战斗交互、状态维护和资源回收"
+    },
+    {
+      "type": "module_summary",
+      "distance": 0.388,
+      "description": "游戏管理模块，负责场景和怪物的生命周期管理",
+      "module_name": "game/manager",
+      "entry_points": "SceneManager.create_scene,SceneManager.get_scene,MonsterManager.spawn_monster,MonsterManager.spawn_boss,MonsterManager.get_monster,MonsterManager.player_attack_monster",
+      "key_classes": "SceneManager,MonsterManager"
+    },
+    {
+      "type": "method",
+      "distance": 0.392,
+      "description": "初始化怪物管理器，配置场景管理器和存储怪物数据",
+      "file": "game/manager/monster_manager.py",
+      "line": "13",
+      "function": "__init__",
+      "class": "MonsterManager"
+    },
+    {
+      "type": "method",
+      "distance": 0.408,
+      "description": "玩家攻击怪物并处理伤害、经验和掉落",
+      "file": "game/manager/monster_manager.py",
+      "line": "58",
+      "function": "player_attack_monster",
+      "class": "MonsterManager"
+    }
+  ],
+  "12_search_by_type_filter": [
+    {
+      "type": "class_summary",
+      "distance": 0.542,
+      "description": "管理所有场景实例，提供场景的创建、获取、移除和列表功能",
+      "class_name": "SceneManager",
+      "key_methods": "create_scene,get_scene,remove_scene,list_scenes,setup_default_scenes",
+      "responsibility": "负责游戏场景的生命周期管理，包括场景的创建、查询、删除和初始化默认场景"
+    },
+    {
+      "type": "class_summary",
+      "distance": 0.551,
+      "description": "管理全局怪物的生成、销毁、战斗交互和状态重置",
+      "class_name": "MonsterManager",
+      "key_methods": "spawn_monster,spawn_boss,player_attack_monster,remove_monster,respawn_all",
+      "responsibility": "负责游戏中所有怪物的生命周期管理，包括生成、战斗交互、状态维护和资源回收"
+    }
+  ],
+  "13_search_by_type_module": [
+    {
+      "type": "method",
+      "distance": 0.552,
+      "description": "初始化场景管理器，配置管理器并初始化场景字典",
+      "file": "game/manager/scene_manager.py",
+      "line": "12",
+      "function": "__init__",
+      "class": "SceneManager"
+    },
+    {
+      "type": "file",
+      "distance": 0.552,
+      "description": "管理器模块初始化文件",
+      "file": "game/manager/__init__.py",
+      "line": "1",
+      "function": "__init__.py",
+      "class": ""
+    },
+    {
+      "type": "method",
+      "distance": 0.563,
+      "description": "初始化怪物管理器，配置场景管理器和存储怪物数据",
+      "file": "game/manager/monster_manager.py",
+      "line": "13",
+      "function": "__init__",
+      "class": "MonsterManager"
+    },
+    {
+      "type": "class_overview",
+      "distance": 0.568,
+      "description": "管理所有场景实例",
+      "file": "game/manager/scene_manager.py",
+      "line": "9",
+      "function": "SceneManager (概览)",
+      "class": "SceneManager"
+    },
+    {
+      "type": "method",
+      "distance": 0.577,
+      "description": "创建一个新的场景实例并添加到场景管理器中",
+      "file": "game/manager/scene_manager.py",
+      "line": "16",
+      "function": "create_scene",
+      "class": "SceneManager"
+    }
+  ],
+  "14_search_by_type_combined": [
+    {
+      "type": "method",
+      "distance": 0.429,
+      "description": "初始化场景管理器，配置管理器并初始化场景字典",
+      "file": "game/manager/scene_manager.py",
+      "line": "12",
+      "function": "__init__",
+      "class": "SceneManager"
+    },
+    {
+      "type": "method",
+      "distance": 0.468,
+      "description": "创建一个新的场景实例并添加到场景管理器中",
+      "file": "game/manager/scene_manager.py",
+      "line": "16",
+      "function": "create_scene",
+      "class": "SceneManager"
+    },
+    {
+      "type": "method",
+      "distance": 0.504,
+      "description": "初始化怪物管理器，配置场景管理器和存储怪物数据",
+      "file": "game/manager/monster_manager.py",
+      "line": "13",
+      "function": "__init__",
+      "class": "MonsterManager"
+    },
+    {
+      "type": "method",
+      "distance": 0.508,
+      "description": "根据场景ID移除场景",
+      "file": "game/manager/scene_manager.py",
+      "line": "27",
+      "function": "remove_scene",
+      "class": "SceneManager"
+    },
+    {
+      "type": "method",
+      "distance": 0.514,
+      "description": "列出所有场景信息",
+      "file": "game/manager/scene_manager.py",
+      "line": "34",
+      "function": "list_scenes",
+      "class": "SceneManager"
+    }
+  ],
+  "15_find_class_summary": [
+    {
+      "type": "class_summary",
+      "distance": 0.249,
+      "description": "管理全局怪物的生成、销毁、战斗交互和状态重置",
+      "class_name": "MonsterManager",
+      "key_methods": "spawn_monster,spawn_boss,player_attack_monster,remove_monster,respawn_all",
+      "responsibility": "负责游戏中所有怪物的生命周期管理，包括生成、战斗交互、状态维护和资源回收"
+    }
+  ],
+  "16_find_module_summary": [
+    {
+      "type": "module_summary",
+      "distance": 0.396,
+      "description": "游戏管理模块，负责场景和怪物的生命周期管理",
+      "module_name": "game/manager",
+      "entry_points": "SceneManager.create_scene,SceneManager.get_scene,MonsterManager.spawn_monster,MonsterManager.spawn_boss,MonsterManager.get_monster,MonsterManager.player_attack_monster",
+      "key_classes": "SceneManager,MonsterManager"
+    }
+  ]
+}
