@@ -54,3 +54,5 @@ Thumbs.db
 testhd/.claude/settings.local.json
 pip.ini
 pip.conf
+
+config.yaml
