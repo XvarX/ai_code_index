@@ -428,10 +428,20 @@ def chunk_project(config):
     files = scan_project(root, ignore, patterns)
     print(f"扫描到 {len(files)} 个Python文件")
 
+    # 归一化根目录为正斜杠，用于提取相对路径
+    norm_root = root.replace('\\', '/').rstrip('/')
+
     all_chunks = []
     for filepath in files:
         try:
             chunks = extract_chunks(filepath)
+            # 将绝对路径转为相对路径（正斜杠，跨平台通用）
+            for chunk in chunks:
+                abs_path = chunk['file'].replace('\\', '/')
+                if abs_path.startswith(norm_root + '/'):
+                    chunk['file'] = abs_path[len(norm_root) + 1:]
+                elif abs_path.startswith(norm_root) and len(abs_path) > len(norm_root):
+                    chunk['file'] = abs_path[len(norm_root):].lstrip('/')
             all_chunks.extend(chunks)
         except Exception as e:
             print(f"  跳过文件 {filepath}: {e}")

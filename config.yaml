@@ -4,7 +4,7 @@ project:
   # 1. 环境变量 GAME_SERVER_ROOT
   # 2. 相对于 config.yaml 的路径（使用 ./testhd）
   # 3. 绝对路径（不推荐，会导致跨机器问题）
-  root: "${GAME_SERVER_ROOT:-./testhd}"  # 使用环境变量或相对路径
+  root: "D:\\space\\labspace\\testhd"  # 使用环境变量或相对路径
   language: "python"
   ignore_dirs:
     - "__pycache__"
@@ -44,13 +44,13 @@ embedding:
   provider: "glm"
   model: "embedding-3"
   base_url: "https://open.bigmodel.cn/api/paas/v4"
-  api_key: "fc39a6e1d4dc485e9ac875eb677419b3.xWoPVB7G5KFw5mIp"  # TODO: 填你的API Key，或设置环境变量 OPENAI_API_KEY
+  api_key: ""  # TODO: 填你的API Key，或设置环境变量 OPENAI_API_KEY
 
 llm:
   provider: "glm"
   model: "glm-4"
   base_url: "https://open.bigmodel.cn/api/paas/v4"
-  api_key: "fc39a6e1d4dc485e9ac875eb677419b3.xWoPVB7G5KFw5mIp"  # TODO: 填你的API Key，或设置环境变量 OPENAI_API_KEY
+  api_key: ""  # TODO: 填你的API Key，或设置环境变量 OPENAI_API_KEY
   max_tokens: 100
   concurrency: 2  # 最大同时请求数，一个返回下一个才发
 

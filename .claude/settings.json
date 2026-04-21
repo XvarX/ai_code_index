@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import py_compile; py_compile.compile\\('mcp_server/rag_search.py', doraise=True\\); print\\('语法检查通过'\\)\")",
+      "Bash(python -c \"import py_compile; py_compile.compile\\('build/chunker.py', doraise=True\\); print\\('语法检查通过'\\)\")",
+      "Bash(python -c \"import py_compile; py_compile.compile\\('mcp_server/scip_index.py', doraise=True\\); print\\('OK'\\)\")"
+    ]
+  }
+}

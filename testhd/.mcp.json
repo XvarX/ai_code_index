@@ -1,9 +1,0 @@
-{
-  "mcpServers": {
-    "game_server_rag": {
-      "command": "python",
-      "args": ["../mcp_server/server.py"],
-      "cwd": ".."
-    }
-  }
-}

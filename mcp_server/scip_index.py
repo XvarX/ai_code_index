@@ -75,6 +75,7 @@ class SCIPIndex:
             return name_part[:-1], 'class'
         elif '#' in name_part:
             # 方法: CBox#NewHour().
+            # 也包括参数引用: CBox#NewHour().(param) -> 视为父方法
             class_name, rest = name_part.split('#', 1)
             method_name = rest.rstrip('.').split('(')[0]
             return f"{class_name}.{method_name}", 'method'
@@ -160,8 +161,18 @@ class SCIPIndex:
                 r = list(occ.range)
                 start_line = r[0] if len(r) > 0 else 0
                 start_char = r[1] if len(r) > 1 else 0
-                end_line = r[2] if len(r) > 2 else start_line
-                end_char = r[3] if len(r) > 3 else start_char
+                # SCIP range 编码:
+                #   3 元素: [startLine, startCharacter, endCharacter] (endLine=startLine)
+                #   4 元素: [startLine, startCharacter, endLine, endCharacter]
+                if len(r) == 3:
+                    end_line = start_line
+                    end_char = r[2]
+                elif len(r) >= 4:
+                    end_line = r[2]
+                    end_char = r[3]
+                else:
+                    end_line = start_line
+                    end_char = start_char
 
                 is_def = bool(occ.symbol_roles & ROLE_DEFINITION)
 
@@ -176,11 +187,18 @@ class SCIPIndex:
                     'is_definition': is_def,
                 }
 
-                # enclosing_range
+                # enclosing_range（同样的 3/4 元素编码）
                 if occ.enclosing_range:
                     er = list(occ.enclosing_range)
-                    occ_info['enclosing_start_line'] = er[0] if len(er) > 0 else 0
-                    occ_info['enclosing_end_line'] = er[2] if len(er) > 2 else er[0] if len(er) > 0 else 0
+                    enc_start_line = er[0] if len(er) > 0 else 0
+                    if len(er) == 3:
+                        enc_end_line = enc_start_line
+                    elif len(er) >= 4:
+                        enc_end_line = er[2]
+                    else:
+                        enc_end_line = enc_start_line
+                    occ_info['enclosing_start_line'] = enc_start_line
+                    occ_info['enclosing_end_line'] = enc_end_line
 
                 self.occurrences[occ.symbol].append(occ_info)
                 self.file_occurrences[rel_path].append(occ_info)
@@ -203,12 +221,18 @@ class SCIPIndex:
                     short_name, sym_kind = self._extract_short_name(occ.symbol)
                     if short_name:
                         self.name_to_symbols[short_name].append(occ.symbol)
-                        self.file_definitions[rel_path].append({
-                            'symbol': occ.symbol,
-                            'kind': sym_kind,
-                            'line': start_line,
-                            'name': short_name,
-                        })
+                        # 跳过参数级定义 (method().(param))，只保留方法/类/函数/模块
+                        is_param = ').(' in occ.symbol
+                        if not is_param:
+                            # 去重：避免同一文件同一位置重复添加
+                            existing = self.file_definitions[rel_path]
+                            if not any(d['line'] == start_line and d['name'] == short_name for d in existing):
+                                existing.append({
+                                    'symbol': occ.symbol,
+                                    'kind': sym_kind,
+                                    'line': start_line,
+                                    'name': short_name,
+                                })
 
                 # 函数范围（用于调用图构建）
                 if is_def and occ.enclosing_range:
@@ -237,8 +261,13 @@ class SCIPIndex:
         return self
 
     def _build_call_graphs(self):
-        """从 enclosing_range 构建调用图"""
-        # 建立函数范围查找表: (file, line) -> enclosing symbol
+        """从函数范围构建调用图
+
+        scip-python 生成的非定义 occurrence 不携带 enclosing_range，
+        因此用 occurrence 自身的行号去匹配函数范围，确定调用关系。
+        只追踪函数/方法级别的调用（被引用的符号本身需是函数/方法）。
+        """
+        # 建立函数范围查找表: (file, start_line, end_line, symbol)
         func_lookup = []
         for sym, info in self.function_ranges.items():
             func_lookup.append((info['file'], info['start_line'], info['end_line'], sym))
@@ -249,12 +278,13 @@ class SCIPIndex:
             for occ in occs:
                 if occ['is_definition']:
                     continue
-                if 'enclosing_start_line' not in occ:
+                # 只追踪函数/方法级别的调用（被引用的符号本身是函数/方法）
+                if symbol not in self.function_ranges:
                     continue
 
-                # 找到包含此 occurrence 的函数
+                # 用 occurrence 自身的行号查找包含它的函数
                 file = occ['file']
-                line = occ['enclosing_start_line']
+                line = occ['line']
 
                 # 在 func_lookup 中查找
                 enclosing_sym = None
@@ -274,6 +304,8 @@ class SCIPIndex:
 
         best = None
         best_size = float('inf')
+        best_resolved = None
+        best_resolved_size = float('inf')
 
         for f, sl, sc, el, ec, sym, roles in self.position_index:
             if f != file_normalized:
@@ -286,8 +318,15 @@ class SCIPIndex:
                 if size < best_size:
                     best_size = size
                     best = sym
+                # 优先记录有有效短名的符号
+                if size < best_resolved_size:
+                    short_name, _ = self._extract_short_name(sym)
+                    if short_name:
+                        best_resolved_size = size
+                        best_resolved = sym
 
-        return best
+        # 优先返回已解析符号（有有效短名），否则回退到最小范围
+        return best_resolved if best_resolved is not None else best
 
     def get_definition(self, file: str, line: int, column: int = 0) -> str:
         """跳转到定义。等价 LSP textDocument/definition"""

@@ -11,6 +11,7 @@ import chromadb
 
 class RAGSearcher:
     def __init__(self, config):
+        self.project_root = config.get('project', {}).get('root', '')
         db_path = config.get('db_path', '')
         if not os.path.isabs(db_path):
             here = os.path.dirname(os.path.abspath(__file__))
@@ -33,6 +34,49 @@ class RAGSearcher:
         else:
             self.embed_client = None
             self.embed_model = None
+
+    def _normalize_file_path(self, file_path):
+        """归一化文件路径，兼容不同 OS 构建的数据。
+
+        处理场景：
+        - Linux 绝对路径: /home/user/project/testhd/gameplay/box.py
+        - 相对路径（正斜杠）: gameplay/box.py 或 testhd/gameplay/box.py
+        - Windows 绝对路径: d:\\space\\...\\testhd\\gameplay\\box.py
+        """
+        if not file_path:
+            return file_path
+
+        project_root = self.project_root
+        if not project_root:
+            return file_path.replace('/', os.sep)
+
+        norm_file = file_path.replace('\\', '/')
+        norm_root = project_root.replace('\\', '/').rstrip('/')
+        project_name = os.path.basename(norm_root)
+
+        # 已经是当前项目根目录下的路径，直接修正分隔符
+        if norm_file.startswith(norm_root + '/'):
+            return os.path.normpath(file_path)
+
+        # 以项目名开头的相对路径: testhd/gameplay/box.py -> gameplay/box.py
+        prefix = project_name + '/'
+        if project_name and norm_file.startswith(prefix):
+            rel_part = norm_file[len(prefix):]
+            return os.path.normpath(os.path.join(project_root, rel_part))
+
+        # 绝对路径中包含项目名: /home/user/testhd/gameplay/box.py -> gameplay/box.py
+        marker = '/' + project_name + '/'
+        if project_name and marker in norm_file:
+            idx = norm_file.find(marker)
+            rel_part = norm_file[idx + len(marker):]
+            return os.path.normpath(os.path.join(project_root, rel_part))
+
+        # 普通相对路径: gameplay/box.py
+        if not os.path.isabs(file_path):
+            return os.path.normpath(os.path.join(project_root, norm_file))
+
+        # 兜底：修正分隔符
+        return os.path.normpath(file_path)
 
     def _embed_query(self, text):
         """向量化查询文本（仅 api 模式）"""
@@ -86,7 +130,7 @@ class RAGSearcher:
                 })
             else:
                 result_item.update({
-                    'file': meta.get('file', ''),
+                    'file': self._normalize_file_path(meta.get('file', '')),
                     'line': meta.get('line', ''),
                     'function': meta.get('function', ''),
                     'class': meta.get('struct', ''),
@@ -121,7 +165,7 @@ class RAGSearcher:
             distance = results["distances"][0][i]
 
             output.append({
-                'file': meta.get('file', ''),
+                'file': self._normalize_file_path(meta.get('file', '')),
                 'line': meta.get('line', ''),
                 'function': meta.get('function', ''),
                 'class': meta.get('struct', ''),
@@ -205,7 +249,14 @@ class RAGSearcher:
             }
         else:
             where = {'type': 'module_summary'}
-        return self._search(f"{module_name} 模块流程入口", where, n_results=5)
+        result = self._search(f"{module_name} 模块流程入口", where, n_results=5)
+
+        # 精确匹配无结果时，回退到仅按类型+语义搜索（支持短模块名如 "monster"）
+        if module_name and '"error": "未找到结果"' in result:
+            fallback_where = {'type': 'module_summary'}
+            result = self._search(f"{module_name} 模块流程入口", fallback_where, n_results=5)
+
+        return result
 
     def search_by_type(self, query, chunk_type="", module="", action="", target="", n_results=5):
         """按类型搜索（function/class_summary/module_summary），支持精确过滤"""

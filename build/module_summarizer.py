@@ -70,8 +70,8 @@ def _group_chunks_by_module(chunks, config):
     # 获取项目根目录，用于规范化路径
     project_root = config.get('project', {}).get('root', '')
 
-    # 先统计所有文件的目录结构，用于智能检测
-    dir_structure = defaultdict(set)  # dir -> set of files
+    # 统计每个目录下的文件数（递归），用于智能检测子模块
+    dir_structure = defaultdict(set)  # dir -> set of files (含子目录文件)
     for chunk in chunks:
         filepath = chunk['file']
         # 规范化路径：去掉绝对路径前缀，统一用 / 分隔
@@ -82,10 +82,47 @@ def _group_chunks_by_module(chunks, config):
 
         parts = rel_path.replace('\\', '/').split('/')
         if len(parts) >= 1:
-            # 记录每个目录的文件
-            for i in range(1, len(parts) + 1):
+            # 只记录目录层级（不包括文件名本身）
+            for i in range(1, len(parts)):
                 dir_path = '/'.join(parts[:i])
                 dir_structure[dir_path].add(filepath)
+
+    def _find_module(parts):
+        """从顶层向下递归查找最深的合格子模块"""
+        if len(parts) < 1:
+            return 'root'
+
+        top_dir = parts[0]
+
+        # 强制整体模块
+        if top_dir in force_whole:
+            return top_dir
+
+        # 文件直接在顶层目录下，没有子目录
+        if len(parts) <= 1:
+            return top_dir
+
+        module = top_dir
+        max_depth = len(parts) - 1  # 目录深度（不含文件名）
+
+        # 从第 2 层开始，逐层向下检测
+        for depth in range(2, max_depth + 1):
+            sub_dir_name = parts[depth - 1]
+
+            # 该子目录在跳过列表中，停止深入
+            if sub_dir_name in skip_subs:
+                break
+
+            candidate = '/'.join(parts[:depth])
+
+            # 该目录有足够的文件，更新为更深的模块
+            if len(dir_structure.get(candidate, set())) >= min_files:
+                module = candidate
+            else:
+                # 文件不够，不继续深入
+                break
+
+        return module
 
     for chunk in chunks:
         filepath = chunk['file']
@@ -98,30 +135,7 @@ def _group_chunks_by_module(chunks, config):
 
         parts = rel_path.replace('\\', '/').split('/')
 
-        if len(parts) < 1:
-            module = 'root'
-        else:
-            # 智能检测模块层级
-            top_dir = parts[0]
-
-            # 检查是否在强制整体列表中
-            if top_dir in force_whole:
-                module = top_dir
-            # 检查是否有子模块（子目录包含足够的 .py 文件）
-            elif len(parts) >= 2:
-                sub_dir = parts[1]
-                full_sub_path = f"{top_dir}/{sub_dir}"
-
-                # 检查子目录是否应该被跳过
-                if sub_dir in skip_subs:
-                    module = top_dir
-                # 检查子目录是否包含足够的文件（作为独立模块）
-                elif len(dir_structure.get(full_sub_path, set())) >= min_files:
-                    module = full_sub_path  # 使用完整路径，如 "gameplay/monster"
-                else:
-                    module = top_dir
-            else:
-                module = top_dir
+        module = _find_module(parts)
 
         modules[module]['files'].add(filepath)
         modules[module]['chunks'].append(chunk)
