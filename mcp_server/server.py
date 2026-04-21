@@ -96,7 +96,11 @@ except Exception as e:
 logger.info("加载 SCIP 索引...")
 scip_index_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'index.scip')
 try:
-    scip = SCIPIndex.from_file(scip_index_path, config['project']['root'])
+    scip = SCIPIndex.from_file(
+        scip_index_path,
+        config['project']['root'],
+        rag_dirs=config['project'].get('rag_dirs'),
+    )
     logger.info("SCIP 索引加载成功")
 except Exception as e:
     logger.error(f"SCIP 索引加载失败: {e}")
@@ -240,33 +244,12 @@ async def list_tools() -> list[Tool]:
         ),
         create_tool(
             "search_by_type",
-            "按类型搜索代码。支持自然语言查询。注意：返回的是已有代码的描述，仅用于理解架构，不要照搬模块名或类名到新代码中。",
+            "语义搜索代码。输入自然语言查询，返回相关代码块。注意：返回的是已有代码的描述，仅用于理解架构，不要照搬模块名或类名到新代码中。",
             {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "搜索查询"},
-                    "chunk_type": {
-                        "type": "string",
-                        "description": "类型过滤: function/class_summary/module_summary",
-                        "default": ""
-                    },
-                    "module": {"type": "string", "description": "模块名过滤", "default": ""},
-                    "action": {"type": "string", "description": "动作类型过滤", "default": ""},
-                    "target": {"type": "string", "description": "操作对象过滤", "default": ""},
+                    "query": {"type": "string", "description": "自然语言搜索查询"},
                     "n_results": {"type": "integer", "default": 5}
-                }
-            }
-        ),
-        create_tool(
-            "find_function",
-            "按功能类型查找函数代码（向后兼容）。注意：返回的是已有代码的描述，仅用于理解架构，不要照搬模块名或类名到新代码中。",
-            {
-                "type": "object",
-                "properties": {
-                    "module": {"type": "string", "description": "模块名"},
-                    "action": {"type": "string", "description": "动作类型"},
-                    "target": {"type": "string", "description": "操作对象"},
-                    "keyword": {"type": "string", "default": ""}
                 }
             }
         ),
@@ -327,18 +310,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         elif name == "search_by_type":
             result = rag.search_by_type(
                 arguments.get("query", ""),
-                arguments.get("chunk_type", ""),
-                arguments.get("module", ""),
-                arguments.get("action", ""),
-                arguments.get("target", ""),
-                arguments.get("n_results", 5)
-            )
-        elif name == "find_function":
-            result = rag.find_function(
-                arguments.get("module", ""),
-                arguments.get("action", ""),
-                arguments.get("target", ""),
-                arguments.get("keyword", "")
+                n_results=arguments.get("n_results", 5)
             )
         # 已废弃工具（保留兼容）
         elif name == "find_by_struct":
@@ -352,6 +324,12 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 "deprecated": True,
                 "message": "find_by_pattern 已废弃，请使用 search_symbol(name) 或 search_by_type(query) 替代",
                 "alternative": "search_symbol / search_by_type"
+            }, ensure_ascii=False)
+        elif name == "find_function":
+            result = json.dumps({
+                "deprecated": True,
+                "message": "find_function 已废弃，请使用 search_by_type(query, module=module) 替代",
+                "alternative": "search_by_type"
             }, ensure_ascii=False)
         else:
             result = f'{{"error": "未知工具: {name}"}}'

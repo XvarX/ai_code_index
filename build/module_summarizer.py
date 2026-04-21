@@ -345,7 +345,8 @@ async def summarize_all_modules(chunks, config, use_scip=True):
         scip_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'index.scip')
         if os.path.exists(scip_path):
             try:
-                shared_scip = SCIPIndex.from_file(scip_path, project_root)
+                shared_scip = SCIPIndex.from_file(scip_path, project_root,
+                                                   rag_dirs=config['project'].get('rag_dirs'))
             except Exception as e:
                 print(f"  SCIP 索引加载失败，使用简单分析: {e}")
                 shared_scip = None

@@ -410,13 +410,37 @@ def extract_chunks(filepath):
 # 项目扫描
 # ============================================================
 
-def scan_project(root_dir, ignore_dirs, file_patterns):
+def scan_project(root_dir, ignore_dirs, file_patterns, rag_dirs=None):
+    """扫描项目文件，支持按 rag_dirs 限定索引范围。
+
+    Args:
+        root_dir: 项目根目录（绝对路径）
+        ignore_dirs: 要忽略的目录名列表
+        file_patterns: 文件扩展名匹配模式，如 ["*.py"]
+        rag_dirs: 可选，只索引这些子目录（相对 root_dir），为空则索引全部
+    """
     target_files = []
-    for dirpath, dirnames, filenames in os.walk(root_dir):
-        dirnames[:] = [d for d in dirnames if d not in ignore_dirs]
-        for filename in filenames:
-            if any(filename.endswith(ext.replace('*', '')) for ext in file_patterns):
-                target_files.append(os.path.join(dirpath, filename))
+
+    if rag_dirs:
+        # 只扫描指定的子目录
+        for rag_dir in rag_dirs:
+            scan_dir = os.path.join(root_dir, rag_dir)
+            if not os.path.isdir(scan_dir):
+                print(f"  警告: rag_dirs 中的目录不存在: {scan_dir}")
+                continue
+            for dirpath, dirnames, filenames in os.walk(scan_dir):
+                dirnames[:] = [d for d in dirnames if d not in ignore_dirs]
+                for filename in filenames:
+                    if any(filename.endswith(ext.replace('*', '')) for ext in file_patterns):
+                        target_files.append(os.path.join(dirpath, filename))
+    else:
+        # 扫描全部目录
+        for dirpath, dirnames, filenames in os.walk(root_dir):
+            dirnames[:] = [d for d in dirnames if d not in ignore_dirs]
+            for filename in filenames:
+                if any(filename.endswith(ext.replace('*', '')) for ext in file_patterns):
+                    target_files.append(os.path.join(dirpath, filename))
+
     return target_files
 
 
@@ -424,8 +448,9 @@ def chunk_project(config):
     root = config['project']['root']
     ignore = config['project']['ignore_dirs']
     patterns = config['project']['file_patterns']
+    rag_dirs = config['project'].get('rag_dirs')
 
-    files = scan_project(root, ignore, patterns)
+    files = scan_project(root, ignore, patterns, rag_dirs)
     print(f"扫描到 {len(files)} 个Python文件")
 
     # 归一化根目录为正斜杠，用于提取相对路径

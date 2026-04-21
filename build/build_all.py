@@ -59,7 +59,8 @@ def main():
     if check_scip_available():
         try:
             scip_path = os.path.join(data_dir, 'index.scip')
-            generate_index(config['project']['root'], scip_path)
+            generate_index(config['project']['root'], scip_path,
+                            rag_dirs=config['project'].get('rag_dirs'))
             scip_available = True
         except Exception as e:
             print(f"  SCIP 索引生成失败，将使用简单分析: {e}\n")

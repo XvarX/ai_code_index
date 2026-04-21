@@ -111,13 +111,87 @@ def _ensure_git_repo(project_root: str) -> bool:
         return False
 
 
-def generate_index(project_root: str, output_path: str) -> str:
+def _run_scip_on_dir(scan_dir: str, output_path: str, scip_exe: str):
+    """对单个目录运行 scip-python 生成索引"""
+    cmd = [
+        scip_exe, 'index', scan_dir,
+        '--project-name', os.path.basename(scan_dir),
+        '--output', output_path,
+    ]
+
+    print(f"  [SCIP] 生成索引: {scan_dir}")
+
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        cwd=scan_dir,
+        shell=(sys.platform == 'win32'),
+    )
+
+    for line in proc.stdout:
+        print(f"  [SCIP] {line.rstrip()}")
+
+    _, stderr = proc.communicate(timeout=300)
+    returncode = proc.returncode
+
+    if returncode != 0:
+        stderr_lower = stderr.lower()
+        if 'not a git repository' in stderr_lower or 'git' in stderr_lower:
+            raise RuntimeError(
+                f"scip-python 需要 Git 仓库，但 {scan_dir} 不是 Git 仓库。\n"
+                f"请在项目目录初始化 Git 仓库。"
+            )
+        else:
+            raise RuntimeError(
+                f"scip-python 失败 (exit {returncode}):\n"
+                f"{stderr[:500]}"
+            )
+
+    if not os.path.exists(output_path):
+        raise FileNotFoundError(f"索引文件未生成: {output_path}")
+
+
+def _merge_scip_files(partial_pairs: list, output_path: str):
+    """合并多个 .scip 文件为一个，修正路径为相对 project_root。
+
+    Args:
+        partial_pairs: [(scip_path, rag_dir), ...] rag_dir 用于补全路径前缀
+        output_path: 合并后的输出路径
+    """
+    _dir = os.path.dirname(os.path.abspath(__file__))
+    if _dir not in sys.path:
+        sys.path.insert(0, os.path.join(_dir, '..', 'mcp_server'))
+    from scip_pb2 import Index as ScipIndexProto
+
+    merged = ScipIndexProto()
+    for scip_path, rag_dir in partial_pairs:
+        prefix = rag_dir.replace('\\', '/').strip('/') + '/'
+        partial = ScipIndexProto()
+        with open(scip_path, 'rb') as f:
+            partial.ParseFromString(f.read())
+        for doc in partial.documents:
+            raw = doc.relative_path.replace('\\', '/')
+            # 如果路径不以 rag_dir 开头，说明 scip-python 用了子目录作为基准，需要补前缀
+            if not raw.startswith(prefix.rstrip('/')):
+                doc.relative_path = prefix + raw
+            merged.documents.append(doc)
+        for sym in partial.external_symbols:
+            merged.external_symbols.append(sym)
+
+    with open(output_path, 'wb') as f:
+        f.write(merged.SerializeToString())
+
+
+def generate_index(project_root: str, output_path: str, rag_dirs=None) -> str:
     """
     运行 scip-python 生成 SCIP 索引
 
     Args:
-        project_root: 要索引的项目目录（绝对路径）
+        project_root: 项目根目录（绝对路径）
         output_path: 输出的 index.scip 路径
+        rag_dirs: 可选，只索引这些子目录（相对 project_root）
 
     Returns:
         生成的 index.scip 文件路径
@@ -140,57 +214,32 @@ def generate_index(project_root: str, output_path: str) -> str:
     if sys.platform == 'win32':
         _patch_windows_sep_bug()
 
-    # Windows 上 subprocess 可能找不到 .cmd 文件，使用完整路径
     scip_exe = shutil.which('scip-python')
-    cmd = [
-        scip_exe, 'index', project_root,
-        '--project-name', os.path.basename(project_root),
-        '--output', output_path,
-    ]
 
-    print(f"  [SCIP] 生成索引: {project_root}")
+    if rag_dirs:
+        # 按每个 rag_dir 分别生成，再合并
+        partial_pairs = []  # [(path, rag_dir), ...]
+        for rag_dir in rag_dirs:
+            scan_dir = os.path.join(project_root, rag_dir)
+            if not os.path.isdir(scan_dir):
+                print(f"  警告: rag_dirs 中的目录不存在: {scan_dir}")
+                continue
+            partial_path = output_path + f'.{rag_dir.replace("/", "_").replace(os.sep, "_")}'
+            _run_scip_on_dir(scan_dir, partial_path, scip_exe)
+            partial_pairs.append((partial_path, rag_dir))
 
-    # 实时输出 scip-python 的日志，让用户看到进度
-    # cwd 设为 project_root，防止 scip-python 受父进程 CWD 影响索引错误目录
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        cwd=project_root,
-        shell=(sys.platform == 'win32'),
-    )
+        if not partial_pairs:
+            raise FileNotFoundError("rag_dirs 中没有有效目录，无法生成索引")
 
-    # 实时打印 stdout
-    for line in proc.stdout:
-        print(f"  [SCIP] {line.rstrip()}")
-
-    # 等待结束，收集 stderr 用于错误报告
-    _, stderr = proc.communicate(timeout=300)
-    returncode = proc.returncode
-
-    if returncode != 0:
-        # 检查是否是 Git 仓库相关的错误
-        stderr_lower = stderr.lower()
-        if 'not a git repository' in stderr_lower or 'git' in stderr_lower:
-            print(f"  [SCIP] 跳过：项目不是 Git 仓库")
-            print(f"  [提示] 在 {project_root} 执行以下命令初始化 Git：")
-            print(f"        cd {project_root}")
-            print(f"        git init")
-            print(f"        git add .")
-            print(f"        git commit -m 'Initial commit'")
-            raise RuntimeError(
-                f"scip-python 需要 Git 仓库，但 {project_root} 不是 Git 仓库。\n"
-                f"请在项目目录初始化 Git 仓库。"
-            )
-        else:
-            raise RuntimeError(
-                f"scip-python 失败 (exit {returncode}):\n"
-                f"{stderr[:500]}"
-            )
-
-    if not os.path.exists(output_path):
-        raise FileNotFoundError(f"索引文件未生成: {output_path}")
+        # 合并并修正路径（单目录也需要修正路径前缀）
+        _merge_scip_files(partial_pairs, output_path)
+        # 清理临时文件
+        for p, _ in partial_pairs:
+            if os.path.exists(p):
+                os.remove(p)
+    else:
+        # 全量索引
+        _run_scip_on_dir(project_root, output_path, scip_exe)
 
     size_kb = os.path.getsize(output_path) / 1024
     print(f"  [SCIP] 索引生成完成: {output_path} ({size_kb:.1f} KB)")
@@ -207,4 +256,4 @@ if __name__ == '__main__':
     project_root = config['project']['root']
     output_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'index.scip')
 
-    generate_index(project_root, output_path)
+    generate_index(project_root, output_path, rag_dirs=config['project'].get('rag_dirs'))

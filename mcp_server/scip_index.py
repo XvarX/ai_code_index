@@ -127,8 +127,14 @@ class SCIPIndex:
         return "", False
 
     @classmethod
-    def from_file(cls, index_path: str, project_root: str = "") -> 'SCIPIndex':
-        """从 .scip protobuf 文件加载索引"""
+    def from_file(cls, index_path: str, project_root: str = "", rag_dirs=None) -> 'SCIPIndex':
+        """从 .scip protobuf 文件加载索引
+
+        Args:
+            index_path: .scip 文件路径
+            project_root: 项目根目录
+            rag_dirs: 可选，只加载这些子目录的索引（相对 project_root，如 ["gameplay", "scene/core"]）
+        """
         self = cls()
         self.project_root = project_root
 
@@ -140,6 +146,12 @@ class SCIPIndex:
 
         # 检测路径前缀（scip-python 可能从上级 git 仓库索引，导致路径带项目名前缀）
         filter_prefix, should_strip = self._detect_path_prefix(proto.documents, project_root)
+
+        # 预处理 rag_dirs：统一为正斜杠，尾部加 / 用于前缀匹配
+        rag_prefixes = None
+        if rag_dirs:
+            rag_prefixes = [d.replace('\\', '/').strip('/') + '/' for d in rag_dirs]
+            logger.info(f"SCIP rag_dirs 过滤: {rag_prefixes}")
 
         skipped = 0
         for doc in proto.documents:
@@ -153,6 +165,13 @@ class SCIPIndex:
                     continue
                 # 剥离前缀，使路径相对于项目根目录
                 raw_path = normalized[len(filter_prefix):]
+
+            # 过滤：按 rag_dirs 限定范围
+            if rag_prefixes:
+                norm_rel = raw_path.replace('\\', '/')
+                if not any(norm_rel.startswith(p) or norm_rel == p.rstrip('/') for p in rag_prefixes):
+                    skipped += 1
+                    continue
 
             rel_path = raw_path.replace('/', os.sep)
 
@@ -260,6 +279,46 @@ class SCIPIndex:
                      f"{len(self.call_graph_outgoing)} 调用关系")
         return self
 
+    def _normalize_file_path(self, file_path):
+        """将各种格式的文件路径归一化为索引中存储的格式（相对路径 + os.sep）。
+
+        处理场景：
+        - 绝对路径: D:\\space\\...\\testhd\\gameplay\\box.py
+        - 带项目名前缀: testhd/gameplay/box.py
+        - 正斜杠相对路径: gameplay/box.py
+        """
+        if not file_path:
+            return file_path
+
+        project_root = self.project_root
+        if not project_root:
+            return file_path.replace('/', os.sep)
+
+        norm_file = file_path.replace('\\', '/')
+        norm_root = project_root.replace('\\', '/').rstrip('/')
+        project_name = os.path.basename(norm_root)
+
+        # 绝对路径：去掉项目根目录前缀
+        if norm_file.startswith(norm_root + '/'):
+            rel = norm_file[len(norm_root) + 1:]
+            return rel.replace('/', os.sep)
+
+        # 带项目名前缀的相对路径: testhd/gameplay/box.py -> gameplay/box.py
+        prefix = project_name + '/'
+        if project_name and norm_file.startswith(prefix):
+            rel = norm_file[len(prefix):]
+            return rel.replace('/', os.sep)
+
+        # 绝对路径中包含项目名: /home/user/testhd/gameplay/box.py -> gameplay/box.py
+        marker = '/' + project_name + '/'
+        if project_name and marker in norm_file:
+            idx = norm_file.find(marker)
+            rel = norm_file[idx + len(marker):]
+            return rel.replace('/', os.sep)
+
+        # 普通相对路径: gameplay/box.py -> gameplay\\box.py
+        return file_path.replace('/', os.sep)
+
     def _build_call_graphs(self):
         """从函数范围构建调用图
 
@@ -330,6 +389,7 @@ class SCIPIndex:
 
     def get_definition(self, file: str, line: int, column: int = 0) -> str:
         """跳转到定义。等价 LSP textDocument/definition"""
+        file = self._normalize_file_path(file)
         symbol = self._find_symbol_at(file, line, column)
         if not symbol:
             return json.dumps({"error": "未找到符号"}, ensure_ascii=False)
@@ -352,6 +412,7 @@ class SCIPIndex:
 
     def find_references(self, file: str, line: int) -> str:
         """查找所有引用。等价 LSP textDocument/references"""
+        file = self._normalize_file_path(file)
         symbol = self._find_symbol_at(file, line)
         if not symbol:
             return json.dumps({"error": "未找到符号"}, ensure_ascii=False)
@@ -369,6 +430,7 @@ class SCIPIndex:
 
     def get_call_chain(self, file: str, line: int, direction: str = "outgoing") -> list:
         """获取调用链。等价 LSP callHierarchy"""
+        file = self._normalize_file_path(file)
         symbol = self._find_symbol_at(file, line)
         if not symbol:
             return json.dumps({"error": "未找到符号"}, ensure_ascii=False)
@@ -423,6 +485,7 @@ class SCIPIndex:
         if not symbols:
             return json.dumps({"error": f"未找到符号: {name}"}, ensure_ascii=False)
 
+        useful_kinds = {'class', 'method', 'function'}
         results = []
         for sym in symbols:
             defn = self.definitions.get(sym)
@@ -430,6 +493,8 @@ class SCIPIndex:
                 continue
             short_name, sym_kind = self._extract_short_name(sym)
             if kind and sym_kind != kind:
+                continue
+            if not kind and sym_kind not in useful_kinds:
                 continue
             results.append({
                 "name": short_name or name,
@@ -441,16 +506,20 @@ class SCIPIndex:
         return json.dumps(results, ensure_ascii=False, indent=2)
 
     def list_symbols(self, file: str, kind: str = "") -> str:
-        """列出文件中所有定义"""
-        file_normalized = file.replace('/', os.sep)
+        """列出文件中所有类和方法定义"""
+        file_normalized = self._normalize_file_path(file)
         defs = self.file_definitions.get(file_normalized, [])
 
         if not defs:
             return json.dumps({"error": f"未找到文件: {file}"}, ensure_ascii=False)
 
+        # 默认只返回 class 和 method/function，跳过 variable/module
+        useful_kinds = {'class', 'method', 'function'}
         results = []
         for d in defs:
             if kind and d['kind'] != kind:
+                continue
+            if not kind and d['kind'] not in useful_kinds:
                 continue
             results.append({
                 "name": d['name'],
@@ -459,11 +528,11 @@ class SCIPIndex:
                 "kind": d['kind'],
             })
 
-        return json.dumps(results, ensure_ascii=False, indent=2)
+        return json.dumps(results, ensure_ascii=False)
 
     def module_overview(self, module_path: str) -> str:
         """列出模块中所有类和顶层函数"""
-        module_prefix = module_path.replace('/', os.sep)
+        module_prefix = self._normalize_file_path(module_path)
 
         classes = []
         functions = []

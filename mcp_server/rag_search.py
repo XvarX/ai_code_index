@@ -36,47 +36,42 @@ class RAGSearcher:
             self.embed_model = None
 
     def _normalize_file_path(self, file_path):
-        """归一化文件路径，兼容不同 OS 构建的数据。
+        """归一化文件路径为相对 project_root 的路径。
 
         处理场景：
-        - Linux 绝对路径: /home/user/project/testhd/gameplay/box.py
-        - 相对路径（正斜杠）: gameplay/box.py 或 testhd/gameplay/box.py
-        - Windows 绝对路径: d:\\space\\...\\testhd\\gameplay\\box.py
+        - Windows 绝对路径: D:\\space\\testhd\\gameplay\\box.py → gameplay/box.py
+        - Linux 绝对路径: /home/user/testhd/gameplay/box.py → gameplay/box.py
+        - 带项目名前缀: testhd/gameplay/box.py → gameplay/box.py
+        - 普通相对路径: gameplay/box.py → gameplay/box.py
         """
         if not file_path:
             return file_path
 
         project_root = self.project_root
         if not project_root:
-            return file_path.replace('/', os.sep)
+            return file_path.replace('\\', '/')
 
         norm_file = file_path.replace('\\', '/')
         norm_root = project_root.replace('\\', '/').rstrip('/')
         project_name = os.path.basename(norm_root)
 
-        # 已经是当前项目根目录下的路径，直接修正分隔符
+        # Windows/Linux 绝对路径，以 project_root 开头
         if norm_file.startswith(norm_root + '/'):
-            return os.path.normpath(file_path)
+            return norm_file[len(norm_root) + 1:]
 
         # 以项目名开头的相对路径: testhd/gameplay/box.py -> gameplay/box.py
         prefix = project_name + '/'
         if project_name and norm_file.startswith(prefix):
-            rel_part = norm_file[len(prefix):]
-            return os.path.normpath(os.path.join(project_root, rel_part))
+            return norm_file[len(prefix):]
 
         # 绝对路径中包含项目名: /home/user/testhd/gameplay/box.py -> gameplay/box.py
         marker = '/' + project_name + '/'
         if project_name and marker in norm_file:
             idx = norm_file.find(marker)
-            rel_part = norm_file[idx + len(marker):]
-            return os.path.normpath(os.path.join(project_root, rel_part))
+            return norm_file[idx + len(marker):]
 
-        # 普通相对路径: gameplay/box.py
-        if not os.path.isabs(file_path):
-            return os.path.normpath(os.path.join(project_root, norm_file))
-
-        # 兜底：修正分隔符
-        return os.path.normpath(file_path)
+        # 普通相对路径: gameplay/box.py（直接返回，统一为正斜杠）
+        return norm_file
 
     def _embed_query(self, text):
         """向量化查询文本（仅 api 模式）"""
@@ -176,11 +171,6 @@ class RAGSearcher:
 
         return output
 
-    def find_function(self, module="", action="", target="", keyword=""):
-        """向后兼容：映射到 search_by_type"""
-        query = keyword or f"{action} {target}"
-        return self.search_by_type(query, module=module, action=action, target=target)
-
     def find_by_struct(self, struct_name, method_filter=""):
         """按类名过滤"""
         where = {'struct': struct_name}
@@ -258,21 +248,6 @@ class RAGSearcher:
 
         return result
 
-    def search_by_type(self, query, chunk_type="", module="", action="", target="", n_results=5):
-        """按类型搜索（function/class_summary/module_summary），支持精确过滤"""
-        conditions = []
-        if chunk_type:
-            conditions.append({'type': chunk_type})
-        if module:
-            conditions.append({'module': module})
-        if action:
-            conditions.append({'action': action})
-        if target:
-            conditions.append({'target': target})
-        if len(conditions) > 1:
-            where = {'$and': conditions}
-        elif conditions:
-            where = conditions[0]
-        else:
-            where = None
-        return self._search(query, where, n_results=n_results)
+    def search_by_type(self, query, n_results=5):
+        """语义搜索代码"""
+        return self._search(query, where=None, n_results=n_results)
