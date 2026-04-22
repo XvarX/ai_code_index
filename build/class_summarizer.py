@@ -340,8 +340,10 @@ async def _two_step_class(client, class_name, group, fields_text,
     return await _single_step_class(client, step2_prompt, class_name, group, model, max_tokens)
 
 
-async def summarize_all_classes(chunks, config):
-    """为所有类生成概述"""
+async def summarize_all_classes(chunks, config, cache_path=None):
+    """为所有类生成概述。
+    支持中继：缓存文件中已有的类会跳过，每处理完一个类保存进度。
+    """
     client = AsyncOpenAI(
         api_key=config['llm'].get('api_key') or os.getenv('OPENAI_API_KEY'),
         base_url=config['llm'].get('base_url'),
@@ -358,10 +360,41 @@ async def summarize_all_classes(chunks, config):
     class_chunks = _group_chunks_by_class(chunks)
     print(f"发现 {len(class_chunks)} 个类")
 
+    # 加载已有缓存，跳过已完成的类
+    existing_summaries = {}
+    if cache_path and os.path.exists(cache_path):
+        try:
+            with open(cache_path, 'r', encoding='utf-8') as f:
+                cached = json.load(f)
+            for s in cached:
+                cn = s.get('class_name', '')
+                if cn and s.get('description'):
+                    existing_summaries[cn] = s
+            print(f"  中继: 跳过 {len(existing_summaries)} 个已有类概述")
+        except Exception:
+            pass
+
+    # 过滤出需要处理的类
+    need_process = {name: group for name, group in class_chunks.items()
+                    if name not in existing_summaries}
+
+    if not need_process:
+        await client.close()
+        return list(existing_summaries.values())
+
     # 并发生成概述
     semaphore = asyncio.Semaphore(concurrency)
-    done_count = 0
+    done_count = len(existing_summaries)
+    total = len(class_chunks)
     done_lock = asyncio.Lock()
+
+    def _save_checkpoint():
+        if cache_path:
+            all_summaries = list(existing_summaries.values()) + new_summaries
+            with open(cache_path, 'w', encoding='utf-8') as f:
+                json.dump(all_summaries, f, ensure_ascii=False, indent=2)
+
+    new_summaries = []
 
     async def process_one(class_name, group):
         nonlocal done_count
@@ -372,15 +405,18 @@ async def summarize_all_classes(chunks, config):
 
             async with done_lock:
                 done_count += 1
-                print(f"  [{done_count}/{len(class_chunks)}] {class_name}: {summary['description'][:50]}")
+                new_summaries.append(summary)
+                print(f"  [{done_count}/{total}] {class_name}: {summary['description'][:50]}")
+                # 每完成一个就保存（类数量通常不多）
+                _save_checkpoint()
 
             return summary
 
-    tasks = [process_one(name, group) for name, group in class_chunks.items()]
-    class_summaries = await asyncio.gather(*tasks)
+    tasks = [process_one(name, group) for name, group in need_process.items()]
+    await asyncio.gather(*tasks)
 
     await client.close()
-    return [s for s in class_summaries if s]
+    return list(existing_summaries.values()) + new_summaries
 
 
 if __name__ == '__main__':

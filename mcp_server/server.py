@@ -100,6 +100,12 @@ import atexit
 atexit.register(lsp.shutdown)
 logger.info("✓ LSP 客户端已创建（将在首次查询时启动 pyright）")
 
+# 启动时预构建符号索引（供 search_function / find_inheritance 使用）
+logger.info("正在构建符号索引...")
+lsp._build_symbol_index()
+count = len(lsp._symbol_index) if lsp._symbol_index else 0
+logger.info(f"✓ 符号索引就绪: {count} 个符号")
+
 # ===== 创建 MCP 服务器 =====
 server = Server("game_server_rag")
 

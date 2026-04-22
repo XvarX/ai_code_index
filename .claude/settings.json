@@ -12,7 +12,9 @@
       "Bash(python -c \"import ast; [ast.parse\\(open\\(f, encoding='utf-8'\\).read\\(\\)\\) for f in ['build/llm_utils.py', 'build/describer.py', 'build/class_summarizer.py', 'build/module_summarizer.py']]\")",
       "Bash(python test_llm_utils.py)",
       "Bash(python -c \"import ast; ast.parse\\(open\\('build/module_summarizer.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")",
-      "Bash(python -c ':*)"
+      "Bash(python -c ':*)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('mcp_server/lsp_client.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('build/build_all.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")"
     ],
     "additionalDirectories": [
       "D:\\space\\labspace\\testserver\\base",

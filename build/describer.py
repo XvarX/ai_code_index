@@ -30,10 +30,12 @@ PROMPT_TEMPLATE = """\
   "pattern": "代码模式: 创建流程/事件处理/定时任务/协议处理/数据持久化/状态机/奖励发放/匹配组队，没有则为空"
 }}"""
 
+# 每 N 条保存一次进度
+CHECKPOINT_INTERVAL = 10
+
 
 def _parse_llm_response(text, chunk, fallback_tags):
     """解析LLM返回的JSON，失败则用自动标签兜底"""
-    # 字段规范
     field_specs = {
         'description': {'type': str, 'default': ''},
         'module': {'type': str, 'default': ''},
@@ -53,7 +55,6 @@ def _parse_llm_response(text, chunk, fallback_tags):
 
     # JSON 解析失败或 description 为空，用原始文本兜底
     raw = text.strip() if text else ''
-    # 如果 raw 看起来像 JSON，取 description 字段
     if raw.startswith('{'):
         parsed = parse_llm_json(raw)
         if parsed and parsed.get('description'):
@@ -70,6 +71,14 @@ def _parse_llm_response(text, chunk, fallback_tags):
         'target': fallback_tags.get('target', ''),
         'pattern': '',
     }
+
+
+def _save_checkpoint(chunks, cache_path):
+    """保存进度到缓存文件"""
+    if not cache_path:
+        return
+    with open(cache_path, 'w', encoding='utf-8') as f:
+        json.dump(chunks, f, ensure_ascii=False)
 
 
 async def describe_one(client, chunk, model, max_tokens, input_limit):
@@ -131,7 +140,10 @@ async def describe_one(client, chunk, model, max_tokens, input_limit):
     return content, True
 
 
-async def describe_all(chunks, config):
+async def describe_all(chunks, config, cache_path=None):
+    """为所有 chunk 生成描述。
+    支持中继：已有 description 的 chunk 会跳过，每 CHECKPOINT_INTERVAL 条保存进度。
+    """
     client = AsyncOpenAI(
         api_key=config['llm'].get('api_key') or os.getenv('OPENAI_API_KEY'),
         base_url=config['llm'].get('base_url'),
@@ -144,12 +156,21 @@ async def describe_all(chunks, config):
 
     # 获取模型输入长度限制
     input_limit = await get_model_input_limit(client, model, config_fallback)
+
+    # 统计已有描述的（中继跳过）
+    already_done = sum(1 for c in chunks if c.get('description'))
+    need_process = [c for c in chunks if not c.get('description')]
     total = len(chunks)
-    done_count = 0
+    done_count = already_done
+
+    if already_done > 0:
+        print(f"  中继: 跳过 {already_done} 条已有描述，剩余 {len(need_process)} 条")
+
+    checkpoint_counter = 0
     done_lock = asyncio.Lock()
 
     async def process_one(chunk):
-        nonlocal done_count
+        nonlocal done_count, checkpoint_counter
         async with semaphore:
             fallback_tags = chunk.get('tags', {})
             try:
@@ -178,19 +199,29 @@ async def describe_all(chunks, config):
 
             async with done_lock:
                 done_count += 1
+                checkpoint_counter += 1
                 print(f"  [{done_count}/{total}] {chunk['name']}: {parsed['description'][:60]}")
+
+                # 每 N 条保存进度
+                if cache_path and checkpoint_counter >= CHECKPOINT_INTERVAL:
+                    checkpoint_counter = 0
+                    _save_checkpoint(chunks, cache_path)
 
             return chunk, ok
 
-    tasks = [process_one(c) for c in chunks]
-    results = await asyncio.gather(*tasks)
+    tasks = [process_one(c) for c in need_process]
+    if tasks:
+        results = await asyncio.gather(*tasks)
 
-    success = sum(1 for _, ok in results if ok)
-    fail = sum(1 for _, ok in results if not ok)
-    print(f"描述生成完成: 成功 {success}, 失败 {fail}")
+        success = sum(1 for _, ok in results if ok)
+        fail = sum(1 for _, ok in results if not ok)
+        print(f"描述生成完成: 新处理 {success}, 失败 {fail}, 跳过 {already_done}")
+
+        # 最终保存一次
+        _save_checkpoint(chunks, cache_path)
 
     await client.close()
-    return [chunk for chunk, _ in results]
+    return chunks
 
 
 if __name__ == '__main__':
@@ -199,7 +230,5 @@ if __name__ == '__main__':
         config = yaml.safe_load(f)
     with open('../data/tagged_chunks.json', 'r', encoding='utf-8') as f:
         chunks = json.load(f)
-    chunks = asyncio.run(describe_all(chunks, config))
-    with open('../data/described_chunks.json', 'w', encoding='utf-8') as f:
-        json.dump(chunks, f, ensure_ascii=False, indent=2)
+    chunks = asyncio.run(describe_all(chunks, config, cache_path='../data/described_chunks.json'))
     print("描述生成完毕")

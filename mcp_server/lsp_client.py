@@ -56,6 +56,8 @@ class LSPClient:
         self._ignore_dirs = {'__pycache__', '.git', 'venv', 'env', 'node_modules', '.idea', '.vscode'}
         # AST 符号索引（search_symbol 用，因为 pyright 的 workspace/symbol 不可靠）
         self._symbol_index = None      # {short_name: [(file, line, kind), ...]}
+        self._file_index = None        # {rel_path: [(name, line, kind), ...]}
+        self._lsp_error = ''           # 最近一次 LSP 启动失败的原因
 
     # ================================================================
     # 进程管理
@@ -67,6 +69,7 @@ class LSPClient:
             return self.process is not None
 
         self._started = True
+        self._lsp_error = ''
         server_cmd = self.lsp_config.get('command', 'pyright-langserver')
 
         try:
@@ -79,12 +82,19 @@ class LSPClient:
             )
             time.sleep(0.3)
             if self.process.poll() is not None:
+                self._lsp_error = f"pyright 进程启动后立即退出 (退出码: {self.process.returncode})"
                 logger.error(f"LSP 进程启动失败，退出码: {self.process.returncode}")
                 self.process = None
                 return False
         except FileNotFoundError:
+            self._lsp_error = f"未找到 pyright-langserver 命令，请执行: pip install pyright"
             logger.error(f"LSP 服务器未找到: {server_cmd}")
             logger.error("  请安装: pip install pyright")
+            self.process = None
+            return False
+        except Exception as e:
+            self._lsp_error = f"LSP 启动异常: {e}"
+            logger.error(f"LSP 启动异常: {e}")
             self.process = None
             return False
 
@@ -110,6 +120,7 @@ class LSPClient:
         })
 
         if result is None:
+            self._lsp_error = "LSP initialize 握手超时或失败"
             logger.error("LSP initialize 超时或失败")
             self._kill_process()
             return False
@@ -303,9 +314,33 @@ class LSPClient:
     # ================================================================
 
     def _build_symbol_index(self):
-        """用 AST 扫描项目文件，构建符号索引（用于 search_symbol）"""
+        """用 AST 扫描项目文件，构建符号索引。
+        兼容 Python 2/3 语法和 GBK 编码。
+        """
         from collections import defaultdict
-        index = defaultdict(list)  # short_name -> [(file, line, kind)]
+
+        cache_dir = os.path.join(os.path.dirname(self.project_root), 'data')
+        cache_path = os.path.join(cache_dir, 'symbol_cache.json')
+
+        # 尝试从缓存加载
+        if os.path.exists(cache_path):
+            try:
+                with open(cache_path, 'r', encoding='utf-8') as f:
+                    cache = json.load(f)
+                cached_root = cache.get('project_root', '')
+                if cached_root == self.project_root and self._cache_is_fresh(cache):
+                    self._symbol_index = {}
+                    for k, v in cache.get('index', {}).items():
+                        self._symbol_index[k] = [tuple(item) for item in v]
+                    logger.info(f"AST 符号索引从缓存加载: {len(self._symbol_index)} 个短名")
+                    return
+            except Exception:
+                pass
+
+        # 缓存不可用，全量构建
+        logger.info("AST 符号索引开始构建...")
+        index = defaultdict(list)
+        file_mtimes = {}
 
         for dirpath, dirnames, filenames in os.walk(self.project_root):
             dirnames[:] = [d for d in dirnames if d not in self._ignore_dirs
@@ -315,30 +350,112 @@ class LSPClient:
                     continue
                 full = os.path.join(dirpath, fn)
                 rel = os.path.relpath(full, self.project_root).replace('\\', '/')
-                try:
-                    with open(full, 'r', encoding='utf-8') as f:
-                        source = f.read()
-                    tree = ast.parse(source)
-                except (SyntaxError, Exception):
+                file_mtimes[rel] = os.path.getmtime(full)
+
+                source = self._read_source(full)
+                if not source:
                     continue
 
-                for node in ast.walk(tree):
-                    if isinstance(node, ast.ClassDef):
-                        index[node.name].append((rel, node.lineno, 'class'))
-                        # 也索引 ClassName.method_name
-                        for item in node.body:
-                            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                                short = f"{node.name}.{item.name}"
-                                index[short].append((rel, item.lineno, 'method'))
-                                # 纯方法名也索引（模糊匹配用）
-                                index[item.name].append((rel, item.lineno, 'method'))
-                    elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                        # 顶层函数（不在类中的）— 通过检查 col_offset == 0 判断
-                        if hasattr(node, 'col_offset') and node.col_offset == 0:
-                            index[node.name].append((rel, node.lineno, 'function'))
+                # 先尝试 AST 解析（Python 3 语法）
+                try:
+                    tree = ast.parse(source)
+                    self._index_ast_nodes(tree, rel, index)
+                    continue
+                except SyntaxError:
+                    pass
+
+                # AST 失败，用正则兜底（兼容 Python 2 语法）
+                self._index_by_regex(source, rel, index)
 
         self._symbol_index = dict(index)
-        logger.info(f"AST 符号索引就绪: {len(self._symbol_index)} 个短名")
+        logger.info(f"AST 符号索引构建完成: {len(self._symbol_index)} 个短名")
+
+        # 写入缓存
+        try:
+            os.makedirs(cache_dir, exist_ok=True)
+            cache_data = {
+                'project_root': self.project_root,
+                'file_mtimes': file_mtimes,
+                'index': {k: list(v) for k, v in self._symbol_index.items()},
+            }
+            with open(cache_path, 'w', encoding='utf-8') as f:
+                json.dump(cache_data, f, ensure_ascii=False)
+            logger.info(f"AST 符号索引已缓存到 {cache_path}")
+        except Exception as e:
+            logger.warning(f"符号索引缓存写入失败: {e}")
+
+    @staticmethod
+    def _read_source(filepath):
+        """读取源码，依次尝试 utf-8、gbk、gb2312、latin-1"""
+        try:
+            with open(filepath, 'rb') as f:
+                raw = f.read()
+        except Exception:
+            return ''
+        for enc in ('utf-8', 'gbk', 'gb2312', 'latin-1'):
+            try:
+                return raw.decode(enc)
+            except (UnicodeDecodeError, ValueError):
+                continue
+        return raw.decode('latin-1')
+
+    @staticmethod
+    def _index_ast_nodes(tree, rel, index):
+        """从 AST 树中提取符号"""
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef):
+                index[node.name].append((rel, node.lineno, 'class'))
+                for item in node.body:
+                    if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        short = f"{node.name}.{item.name}"
+                        index[short].append((rel, item.lineno, 'method'))
+                        index[item.name].append((rel, item.lineno, 'method'))
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if hasattr(node, 'col_offset') and node.col_offset == 0:
+                    index[node.name].append((rel, node.lineno, 'function'))
+
+    @staticmethod
+    def _index_by_regex(source, rel, index):
+        """正则兜底：AST 解析失败时用正则提取 class/def 名称（兼容 Python 2）"""
+        import re
+        # 先收集类名和其起止行
+        class_ranges = []  # [(class_name, start_line, end_indent)]
+        lines = source.split('\n')
+
+        for i, line in enumerate(lines, 1):
+            stripped = line.rstrip()
+            # 顶层 class
+            m = re.match(r'^class\s+(\w+)', stripped)
+            if m:
+                class_ranges.append((m.group(1), i))
+                index[m.group(1)].append((rel, i, 'class'))
+                continue
+
+            # def（顶层函数或类方法）
+            m = re.match(r'^(\s{0,8})def\s+(\w+)', stripped)
+            if m:
+                indent = len(m.group(1))
+                func_name = m.group(2)
+                if indent == 0:
+                    index[func_name].append((rel, i, 'function'))
+                else:
+                    index[func_name].append((rel, i, 'method'))
+                    # 尝试归属到最近的 class
+                    for cls_name, cls_line in reversed(class_ranges):
+                        index[f"{cls_name}.{func_name}"].append((rel, i, 'method'))
+                        break
+
+    def _cache_is_fresh(self, cache):
+        """检查缓存中的文件 mtimes 是否与磁盘一致"""
+        mtimes = cache.get('file_mtimes', {})
+        for rel, cached_mtime in mtimes.items():
+            full = os.path.join(self.project_root, rel)
+            try:
+                if os.path.getmtime(full) != cached_mtime:
+                    return False
+            except OSError:
+                return False
+        return True
 
     def search_symbol(self, name, kind=""):
         """按名称搜索符号定义
@@ -351,6 +468,10 @@ class LSPClient:
         # 懒构建 AST 符号索引
         if self._symbol_index is None:
             self._build_symbol_index()
+            if not self._symbol_index:
+                return json.dumps({
+                    "error": "符号索引为空，项目中可能没有 Python 文件，或项目根目录配置有误"
+                }, ensure_ascii=False)
 
         # 精确查找
         matches = self._symbol_index.get(name, [])
