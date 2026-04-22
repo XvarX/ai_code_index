@@ -4,15 +4,11 @@ module_summarizer.py - 模块概述生成器
 """
 
 import asyncio
+import ast
 import json
 import os
-import sys
 from collections import defaultdict
 from openai import AsyncOpenAI
-
-# 添加 mcp_server 到路径以导入 SCIPIndex
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'mcp_server'))
-from scip_index import SCIPIndex
 
 MODULE_PROMPT = """\
 分析以下Python模块的代码结构，输出JSON格式。
@@ -156,55 +152,49 @@ def _group_chunks_by_module(chunks, config):
 
 
 def _build_simple_call_graph(module_name, chunks):
-    """基于文件名和import分析调用关系（无需LSP的简单版本）"""
-    # 分析 import 关系
-    imports = defaultdict(set)
+    """基于 AST 分析调用关系（解析函数调用节点）"""
+    import os.path
+
+    # 构建符号表: func_name -> [(file, line)]
+    symbol_table = defaultdict(list)
+    for chunk in chunks:
+        filepath = chunk['file']
+        func_name = chunk.get('name', '')
+        if chunk['type'] in ('function', 'method') and func_name:
+            symbol_table[func_name].append((filepath, chunk['start_line']))
+
+    # 分析每个函数体中的调用关系
+    call_graph = defaultdict(set)
 
     for chunk in chunks:
         filepath = chunk['file']
         code = chunk.get('code', '')
+        if chunk['type'] not in ('function', 'method'):
+            continue
 
-        # 简单的 import 分析（识别 from xxx import yyy）
-        for line in code.split('\n'):
-            line = line.strip()
-            if line.startswith('from ') and ' import ' in line:
-                # from .xxx import yyy 或 from gameplay.xxx import yyy
-                parts = line.split()
-                if len(parts) >= 4:
-                    import_path = parts[1]
-                    # 检查是否是同一模块内的导入
-                    if module_name in import_path or import_path.startswith('.'):
-                        imported = parts[3]
-                        imports[filepath].add(imported)
+        try:
+            tree = ast.parse(code)
+        except SyntaxError:
+            continue
 
-    return dict(imports)
+        caller_key = f"{filepath}:{chunk['start_line']}"
 
+        # 遍历 AST 查找函数调用
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                called_name = None
+                if isinstance(node.func, ast.Name):
+                    called_name = node.func.id
+                elif isinstance(node.func, ast.Attribute):
+                    called_name = node.func.attr
 
-async def _build_scip_call_graph(module_name, chunks, scip_index):
-    """使用 SCIP 索引分析函数调用关系"""
-    call_graph = defaultdict(list)
+                if called_name and called_name in symbol_table:
+                    for callee_file, callee_line in symbol_table[called_name]:
+                        callee_key = f"{callee_file}:{callee_line} ({called_name})"
+                        call_graph[caller_key].add(callee_key)
 
-    # 找到模块路径前缀
-    module_prefix = ""
-    for chunk in chunks:
-        if chunk['file']:
-            parts = chunk['file'].replace('\\', '/').split('/')
-            for i in range(len(parts)):
-                prefix = '/'.join(parts[:i+1])
-                if prefix == module_name.replace('\\', '/'):
-                    module_prefix = chunk['file'].rsplit(module_name.replace('\\', '/'), 1)[0]
-                    break
-            if module_prefix:
-                break
-
-    # 从 SCIP 索引获取调用关系
-    graph = scip_index.get_module_call_graph(module_name)
-
-    # 转换为原有格式（set -> list）
-    for key, callees in graph.items():
-        call_graph[key] = list(callees)
-
-    return dict(call_graph)
+    # set -> list
+    return {k: list(v) for k, v in call_graph.items()}
 
 
 def _format_module_info(module_name, group, call_graph):
@@ -319,7 +309,7 @@ async def summarize_module(client, module_name, group, call_graph, project_root,
         }
 
 
-async def summarize_all_modules(chunks, config, use_scip=True):
+async def summarize_all_modules(chunks, config):
     """为所有模块生成概述"""
     client = AsyncOpenAI(
         api_key=config['llm'].get('api_key') or os.getenv('OPENAI_API_KEY'),
@@ -339,21 +329,6 @@ async def summarize_all_modules(chunks, config, use_scip=True):
         group = modules[module_name]
         print(f"  - {module_name}: {len(group['files'])} 个文件, {len(group['classes'])} 个类")
 
-    # 加载 SCIP 索引
-    shared_scip = None
-    if use_scip:
-        scip_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'index.scip')
-        if os.path.exists(scip_path):
-            try:
-                shared_scip = SCIPIndex.from_file(scip_path, project_root,
-                                                   rag_dirs=config['project'].get('rag_dirs'))
-            except Exception as e:
-                print(f"  SCIP 索引加载失败，使用简单分析: {e}")
-                shared_scip = None
-        else:
-            print("  SCIP 索引文件不存在，使用简单分析")
-            shared_scip = None
-
     # 并发生成概述
     semaphore = asyncio.Semaphore(concurrency)
     done_count = 0
@@ -362,15 +337,8 @@ async def summarize_all_modules(chunks, config, use_scip=True):
     async def process_one(module_name, group):
         nonlocal done_count
         async with semaphore:
-            # 分析调用关系（SCIP 索引）
-            if shared_scip:
-                try:
-                    call_graph = await _build_scip_call_graph(module_name, group['chunks'], shared_scip)
-                except Exception as e:
-                    print(f"  SCIP 分析失败，使用简单分析: {e}")
-                    call_graph = _build_simple_call_graph(module_name, group['chunks'])
-            else:
-                call_graph = _build_simple_call_graph(module_name, group['chunks'])
+            # AST 分析调用关系
+            call_graph = _build_simple_call_graph(module_name, group['chunks'])
 
             summary = await summarize_module(
                 client, module_name, group, call_graph,
@@ -387,7 +355,6 @@ async def summarize_all_modules(chunks, config, use_scip=True):
         tasks = [process_one(name, group) for name, group in modules.items()]
         module_summaries = await asyncio.gather(*tasks)
     finally:
-        # 所有模块分析完成后，关闭 AsyncOpenAI 客户端
         await client.close()
 
     return [s for s in module_summaries if s]

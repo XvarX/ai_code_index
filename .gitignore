@@ -36,8 +36,6 @@ ENV/
 data
 data/chroma_db/
 data/lancedb/
-data/index.scip
-data/scip.proto
 *.db
 *.sqlite
 *.sqlite3

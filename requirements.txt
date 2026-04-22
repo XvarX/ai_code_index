@@ -7,8 +7,8 @@ chromadb>=0.4.0
 # LLM 和 Embedding
 openai>=1.30
 
-# SCIP 索引解析
-protobuf>=4.0
+# LSP 客户端（代码导航）
+pyright>=1.1
 
 # YAML 配置
 pyyaml>=6.0

@@ -3,7 +3,22 @@
     "allow": [
       "Bash(python -c \"import py_compile; py_compile.compile\\('mcp_server/rag_search.py', doraise=True\\); print\\('语法检查通过'\\)\")",
       "Bash(python -c \"import py_compile; py_compile.compile\\('build/chunker.py', doraise=True\\); print\\('语法检查通过'\\)\")",
-      "Bash(python -c \"import py_compile; py_compile.compile\\('mcp_server/scip_index.py', doraise=True\\); print\\('OK'\\)\")"
+      "Bash(python -c \"import py_compile; py_compile.compile\\('mcp_server/scip_index.py', doraise=True\\); print\\('OK'\\)\")",
+      "Bash(python -c \"import chromadb; help\\(chromadb.Collection.delete\\)\")",
+      "Bash(pylsp --help)",
+      "Bash(pip list:*)",
+      "Bash(where pyright-langserver:*)",
+      "Read(//d/space/labspace/testserver/**)"
+    ],
+    "additionalDirectories": [
+      "D:\\space\\labspace\\testserver\\base",
+      "D:\\space\\labspace\\testserver\\scene",
+      "D:\\space\\labspace\\testserver\\monster",
+      "D:\\space\\labspace\\testserver\\player",
+      "D:\\space\\labspace\\testserver\\item",
+      "D:\\space\\labspace\\testserver\\reward",
+      "D:\\space\\labspace\\testserver\\config",
+      "D:\\space\\labspace\\testserver"
     ]
   }
 }

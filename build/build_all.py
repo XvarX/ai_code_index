@@ -17,7 +17,6 @@ if utils_dir not in sys.path:
 
 from config_helper import load_config
 
-import yaml
 import json
 import asyncio
 
@@ -28,7 +27,6 @@ from describer import describe_all
 from class_summarizer import summarize_all_classes
 from module_summarizer import summarize_all_modules
 from embedder import embed_and_store
-from scip_indexer import generate_index, check_scip_available
 
 
 def _fmt_elapsed(seconds):
@@ -51,22 +49,7 @@ def main():
     data_dir = os.path.join(os.path.dirname(__file__), '..', 'data')
     os.makedirs(data_dir, exist_ok=True)
 
-    # Step 0: 生成 SCIP 索引
-    print("=" * 50)
-    print("Step 0: 生成 SCIP 代码索引...")
-    t = time.time()
-    scip_available = False
-    if check_scip_available():
-        try:
-            scip_path = os.path.join(data_dir, 'index.scip')
-            generate_index(config['project']['root'], scip_path,
-                            rag_dirs=config['project'].get('rag_dirs'))
-            scip_available = True
-        except Exception as e:
-            print(f"  SCIP 索引生成失败，将使用简单分析: {e}\n")
-    else:
-        print("  scip-python 未安装，跳过（npm install -g @sourcegraph/scip-python）\n")
-    print(f"  耗时: {_fmt_elapsed(time.time() - t)}")
+    # Step 0: 生成 SCIP 索引（已移除，由 LSP 实时查询替代）
 
     # Step 1: 切块
     print("=" * 50)
@@ -120,7 +103,7 @@ def main():
     print("=" * 50)
     print("Step 6: 生成模块概述（使用 SCIP 分析调用关系）...")
     t = time.time()
-    module_summaries = asyncio.run(summarize_all_modules(chunks, config, use_scip=scip_available))
+    module_summaries = asyncio.run(summarize_all_modules(chunks, config))
     with open(os.path.join(data_dir, 'module_summaries.json'), 'w', encoding='utf-8') as f:
         json.dump(module_summaries, f, ensure_ascii=False, indent=2)
     print(f"  -> {len(module_summaries)} 个模块概述 {_fmt_elapsed(time.time() - t)}")

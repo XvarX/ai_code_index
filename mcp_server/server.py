@@ -58,10 +58,10 @@ except Exception as e:
     sys.exit(1)
 
 try:
-    from scip_index import SCIPIndex
-    logger.info("SCIP 索引模块导入成功")
+    from lsp_client import LSPClient
+    logger.info("✓ LSP 客户端模块导入成功")
 except Exception as e:
-    logger.error(f"SCIP 索引模块导入失败: {e}")
+    logger.error(f"✗ LSP 客户端模块导入失败: {e}")
     sys.exit(1)
 
 # ===== 加载配置 =====
@@ -93,21 +93,12 @@ except Exception as e:
     logger.error(traceback.format_exc())
     sys.exit(1)
 
-logger.info("加载 SCIP 索引...")
-scip_index_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'index.scip')
-try:
-    scip = SCIPIndex.from_file(
-        scip_index_path,
-        config['project']['root'],
-        rag_dirs=config['project'].get('rag_dirs'),
-    )
-    logger.info("SCIP 索引加载成功")
-except Exception as e:
-    logger.error(f"SCIP 索引加载失败: {e}")
-    logger.error(f"  请先运行 build/build_all.py 生成索引")
-    import traceback
-    logger.error(traceback.format_exc())
-    sys.exit(1)
+# 初始化 LSP 客户端（懒启动，首次查询时才真正连接）
+lsp_config = config.get('lsp', {})
+lsp = LSPClient(config['project']['root'], lsp_config)
+import atexit
+atexit.register(lsp.shutdown)
+logger.info("✓ LSP 客户端已创建（将在首次查询时启动 pyright）")
 
 # ===== 创建 MCP 服务器 =====
 server = Server("game_server_rag")
@@ -179,7 +170,7 @@ async def list_tools() -> list[Tool]:
                 }
             }
         ),
-        # 第二层：代码导航（SCIP 精确定位）
+        # 第二层：代码导航（LSP 精确定位）
         create_tool(
             "goto_definition",
             "[备用] 根据文件位置跳转到符号定义处。日常用 search_symbol(name) 即可。仅当多个同名符号需要按上下文消歧时使用。输入：file（相对路径如 gameplay/monster.py）、line（1-based）。",
@@ -266,44 +257,37 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     logger.info(f"[调用] {name}({arguments})")
 
     try:
-        # 第一层：符号搜索
+        # 第一层：符号搜索（LSP）
         if name == "search_symbol":
-            result = scip.search_symbol(
+            result = await asyncio.to_thread(lsp.search_symbol,
                 arguments.get("name", ""),
-                arguments.get("kind", "")
-            )
+                arguments.get("kind", ""))
         elif name == "list_symbols":
-            result = scip.list_symbols(
+            result = await asyncio.to_thread(lsp.list_symbols,
                 arguments.get("file", ""),
-                arguments.get("kind", "")
-            )
+                arguments.get("kind", ""))
         elif name == "module_overview":
-            result = scip.module_overview(
-                arguments.get("module_path", "")
-            )
+            result = await asyncio.to_thread(lsp.module_overview,
+                arguments.get("module_path", ""))
         elif name == "find_inheritance":
-            result = scip.find_inheritance(
+            result = await asyncio.to_thread(lsp.find_inheritance,
                 arguments.get("name", ""),
-                arguments.get("direction", "parent")
-            )
-        # 第二层：代码导航
+                arguments.get("direction", "parent"))
+        # 第二层：代码导航（LSP）
         elif name == "goto_definition":
-            result = scip.get_definition(
+            result = await asyncio.to_thread(lsp.get_definition,
                 arguments.get("file"),
                 arguments.get("line"),
-                arguments.get("column", 0)
-            )
+                arguments.get("column", 0))
         elif name == "find_references":
-            result = scip.find_references(
+            result = await asyncio.to_thread(lsp.find_references,
                 arguments.get("file"),
-                arguments.get("line")
-            )
+                arguments.get("line"))
         elif name == "get_call_chain":
-            result = scip.get_call_chain(
+            result = await asyncio.to_thread(lsp.get_call_chain,
                 arguments.get("file"),
                 arguments.get("line"),
-                arguments.get("direction", "outgoing")
-            )
+                arguments.get("direction", "outgoing"))
         # 第三层：模糊搜索
         elif name == "find_module_summary":
             result = rag.find_module_summary(arguments.get("module_name", ""))
