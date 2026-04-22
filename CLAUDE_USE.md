@@ -30,20 +30,20 @@
 - 理解要实现的功能、涉及的模块、是否需要修改现有代码
 
 **2. 查询优先级（从精确到模糊）**
-- 知道类名/函数名 → `search_symbol(name)` → file:line → Read
+- 知道类名/函数名 → `search_function(name)` → file:line → Read
   - 搜方法时优先用 `ClassName.method_name`（如 `MonsterManager.spawn_monster`），只有不知道所属类时才用纯方法名模糊搜索
 - 知道模块路径 → `module_overview(path)` → 选择符号 → Read
 - 以上都不知道 → `search_by_type(query)` 获取线索 → 回到上面
 - 禁止凭猜测直接使用模块名或类名，必须通过工具获取准确信息
 - 工具返回结果中的 file 字段即为实际路径，直接用于后续 Read
-- 若返回的是某个符号的**使用处**而非定义处，优先用 `search_symbol(符号名)` 直接定位定义；仅在同名符号过多需要消歧时才用 `goto_definition(file, line)`
+- 若返回的是某个符号的**使用处**而非定义处，优先用 `search_function(符号名)` 直接定位定义；仅在同名符号过多需要消歧时才用 `goto_definition(file, line)`
 - 中途发现信息不足时，回到查询重新开始，不要直接跳用 Grep
 
 **3. Read 完整源码**
 - 使用 Read 工具读取 RAG 返回的完整文件，不得依赖 code_preview 片段写代码
 - 注意文件顶部的 import 语句，了解项目实际使用的库
 - Read 过程中若遇到不熟悉的函数调用或类引用，**先判断是否与当前待实现功能相关**：
-  - **明确相关**（当前任务会直接调用/修改该符号）：用 `search_symbol(符号名)` 定位并 Read
+  - **明确相关**（当前任务会直接调用/修改该符号）：用 `search_function(符号名)` 定位并 Read
   - **相关性不确定**（属于正在阅读的代码的依赖，但不确定新功能是否需要它）：停下来询问用户是否需要深入了解
   - **明确无关**（只是被读到的代码使用了，但新功能不涉及）：跳过，不追读
 - **读代码时要理解每个模块的职责边界**：Read 的目的是搞清楚"这段代码负责什么"，而不是"这段代码怎么写的"。不要因为某个模块恰好做了某件事，就认为新功能也该由它来做
@@ -62,7 +62,7 @@
 |---------|---------------|------|
 | 需要查找调用关系 | `get_call_chain(file, line, direction)` | `"outgoing"` 查它调用了谁，`"incoming"` 查谁调用了它 |
 | 需要确认某符号的所有使用位置 | `find_references(file, line)` | 列出项目中所有引用该符号的文件和行号 |
-| 需要了解关联上下文 | `search_symbol` + `get_call_chain` | 先用符号名定位定义，再查上下游调用链 |
+| 需要了解关联上下文 | `search_function` + `get_call_chain` | 先用符号名定位定义，再查上下游调用链 |
 
 LSP 查询后仍不充分（如需跨模块搜索、需理解业务逻辑全貌），则必须询问用户是否允许进一步搜索，不要擅自执行 Grep 等操作。
 
@@ -134,13 +134,19 @@ Agent 写代码时必须遵循以下原则：
 
 ## 工具参考（三层架构）
 
+### 参数来源规则（重要）
+
+> **除 `search_by_type` 以外，所有工具的参数必须来自代码或工具返回结果，禁止使用自然语言或猜测。**
+> - 合法来源：Agent 自己 Read 代码时看到的标识符/路径/行号，或工具链返回的结果
+> - `search_by_type` 是唯一接受自然语言查询的工具，用于不知道确切标识符时的初始发现
+
 ### 第一层：符号搜索（精确、零 API 调用）
 
 按名称直接查找，无需语义理解，速度最快。
 
 | 工具 | 解决什么问题 | 参数说明 |
 |------|-------------|---------|
-| `search_symbol(name, kind="")` | 按名称搜索符号定义 | 支持纯方法名（如 spawn_monster）自动模糊匹配；kind 可选: class/method/function |
+| `search_function(name, kind="")` | 按英文标识符搜索符号定义 | 只接受英文标识符，不支持中文。中文查询用 `search_by_type` |
 | `module_overview(module_path)` | 列出模块中所有类和函数 | 适合了解模块结构 |
 | `find_inheritance(name, direction)` | 查找类的继承关系 | direction: parent/children |
 
@@ -169,7 +175,7 @@ Agent 写代码时必须遵循以下原则：
 
 | 工具 | 场景 | 说明 |
 |------|------|------|
-| `goto_definition(file, line)` | 同名符号消歧 | 当多个类有同名方法时，用位置上下文精确跳转。日常用 `search_symbol` 即可 |
+| `goto_definition(file, line)` | 同名符号消歧 | 当多个类有同名方法时，用位置上下文精确跳转。日常用 `search_function` 即可 |
 | `list_symbols(file, kind="")` | 超大文件结构速览 | 大多数情况直接 Read 文件即可 |
 
 **注意：** LSP 查询是实时的，始终反映当前代码状态，无需重新构建索引。

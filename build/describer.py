@@ -7,6 +7,7 @@ import asyncio
 import json
 import os
 from openai import AsyncOpenAI
+from llm_utils import parse_llm_json, validate_response, estimate_tokens, truncate_code, get_model_input_limit
 
 PROMPT_TEMPLATE = """\
 分析以下Python代码，输出JSON格式，不要输出其他内容。
@@ -32,32 +33,38 @@ PROMPT_TEMPLATE = """\
 
 def _parse_llm_response(text, chunk, fallback_tags):
     """解析LLM返回的JSON，失败则用自动标签兜底"""
-    # 尝试提取JSON
-    text = text.strip()
-    # 去掉可能的 markdown 代码块包裹
-    if text.startswith('```'):
-        lines = text.split('\n')
-        text = '\n'.join(lines[1:])
-        if text.endswith('```'):
-            text = text[:-3]
-        text = text.strip()
+    # 字段规范
+    field_specs = {
+        'description': {'type': str, 'default': ''},
+        'module': {'type': str, 'default': ''},
+        'action': {'type': str, 'default': ''},
+        'target': {'type': str, 'default': ''},
+        'pattern': {'type': str, 'default': ''},
+    }
 
-    try:
-        result = json.loads(text)
-        if isinstance(result, dict) and 'description' in result:
-            return {
-                'description': result.get('description', ''),
-                'module': result.get('module', '') or fallback_tags.get('module', ''),
-                'action': result.get('action', '') or fallback_tags.get('action', 'other'),
-                'target': result.get('target', '') or fallback_tags.get('target', ''),
-                'pattern': result.get('pattern', ''),
-            }
-    except json.JSONDecodeError:
-        pass
+    result = parse_llm_json(text)
+    if result and result.get('description'):
+        validated = validate_response(result, field_specs)
+        if validated:
+            validated['module'] = validated['module'] or fallback_tags.get('module', '')
+            validated['action'] = validated['action'] or fallback_tags.get('action', 'other')
+            validated['target'] = validated['target'] or fallback_tags.get('target', '')
+            return validated
 
-    # JSON 解析失败，把整个文本当描述
+    # JSON 解析失败或 description 为空，用原始文本兜底
+    raw = text.strip() if text else ''
+    # 如果 raw 看起来像 JSON，取 description 字段
+    if raw.startswith('{'):
+        parsed = parse_llm_json(raw)
+        if parsed and parsed.get('description'):
+            desc = parsed['description']
+        else:
+            desc = raw[:100]
+    else:
+        desc = raw[:100]
+
     return {
-        'description': text[:100],
+        'description': desc,
         'module': fallback_tags.get('module', ''),
         'action': fallback_tags.get('action', 'other'),
         'target': fallback_tags.get('target', ''),
@@ -65,7 +72,7 @@ def _parse_llm_response(text, chunk, fallback_tags):
     }
 
 
-async def describe_one(client, chunk, model, max_tokens):
+async def describe_one(client, chunk, model, max_tokens, input_limit):
     extra = ''
     if chunk.get('docstring'):
         extra += f"[函数文档] {chunk['docstring']}\n"
@@ -78,9 +85,9 @@ async def describe_one(client, chunk, model, max_tokens):
     if chunk.get('struct_def'):
         class_context = f"[所属类定义]\n{chunk['struct_def']}\n"
 
-    # 给 LLM 看完整代码，不截断（让 LLM 自己处理 token 限制）
     code = chunk['code']
 
+    # 构建 prompt 并检查 token 长度
     prompt = PROMPT_TEMPLATE.format(
         file=chunk['file'],
         class_name=chunk.get('class_name') or ('全局代码' if chunk.get('type') == 'global' else '无（顶层函数）'),
@@ -89,6 +96,30 @@ async def describe_one(client, chunk, model, max_tokens):
         extra_context=extra,
         code=code,
     )
+
+    prompt_tokens = estimate_tokens(prompt)
+    budget = input_limit - max_tokens - 200  # 预留输出和余量
+    if prompt_tokens > budget and budget > 0:
+        # 需要截断 code 部分：估算非 code 部分的 token，剩余给 code
+        non_code = PROMPT_TEMPLATE.format(
+            file=chunk['file'],
+            class_name=chunk.get('class_name') or ('全局代码' if chunk.get('type') == 'global' else '无（顶层函数）'),
+            module_doc=(chunk.get('module_docstring') or '无')[:200],
+            class_context=class_context,
+            extra_context=extra,
+            code='',
+        )
+        code_budget = budget - estimate_tokens(non_code)
+        if code_budget > 100:
+            code = truncate_code(code, code_budget)
+            prompt = PROMPT_TEMPLATE.format(
+                file=chunk['file'],
+                class_name=chunk.get('class_name') or ('全局代码' if chunk.get('type') == 'global' else '无（顶层函数）'),
+                module_doc=(chunk.get('module_docstring') or '无')[:200],
+                class_context=class_context,
+                extra_context=extra,
+                code=code,
+            )
 
     resp = await client.chat.completions.create(
         model=model,
@@ -107,8 +138,12 @@ async def describe_all(chunks, config):
     )
     model = config['llm']['model']
     max_tokens = config['llm']['max_tokens']
+    config_fallback = config['llm'].get('max_input_tokens', 8000)
     concurrency = config['llm'].get('concurrency', 5)
     semaphore = asyncio.Semaphore(concurrency)
+
+    # 获取模型输入长度限制
+    input_limit = await get_model_input_limit(client, model, config_fallback)
     total = len(chunks)
     done_count = 0
     done_lock = asyncio.Lock()
@@ -118,7 +153,7 @@ async def describe_all(chunks, config):
         async with semaphore:
             fallback_tags = chunk.get('tags', {})
             try:
-                content, ok = await describe_one(client, chunk, model, max_tokens)
+                content, ok = await describe_one(client, chunk, model, max_tokens, input_limit)
             except Exception as e:
                 content = ''
                 ok = False

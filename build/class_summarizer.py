@@ -8,6 +8,23 @@ import json
 import os
 from collections import defaultdict
 from openai import AsyncOpenAI
+from llm_utils import (
+    parse_llm_json, validate_response, estimate_tokens,
+    truncate_code, get_model_input_limit,
+)
+
+# 响应字段规范
+CLASS_STEP1_FIELDS = {
+    'important_methods': {'type': list, 'default': []},
+}
+
+CLASS_STEP2_FIELDS = {
+    'description': {'type': str, 'default': ''},
+    'module': {'type': str, 'default': ''},
+    'patterns': {'type': list, 'default': []},
+    'key_methods': {'type': list, 'default': []},
+    'responsibility': {'type': str, 'default': ''},
+}
 
 CLASS_PROMPT = """\
 分析以下Python类的完整定义，输出JSON格式。
@@ -30,6 +47,29 @@ CLASS_PROMPT = """\
   "key_methods": ["核心方法名列表（3-5个最重要）"],
   "responsibility": "这个类的主要职责是什么"
 }}"""
+
+CLASS_STEP1_PROMPT = """\
+分析以下Python类的方法列表，判断哪些是核心方法。
+
+[类名] {class_name}
+[继承] {inherits}
+[类文档] {class_docstring}
+[类字段]
+{fields}
+
+[方法签名列表]
+{method_signatures}
+
+请输出JSON（不要markdown代码块）:
+{{
+  "important_methods": ["方法名1", "方法名2", ...]
+}}
+
+选择标准:
+1. public方法优先（非_开头）
+2. 体现类核心职责的方法
+3. 被其他方法频繁调用的方法
+4. 选3-5个最重要的，最多不超过8个"""
 
 
 def _group_chunks_by_class(chunks):
@@ -59,7 +99,6 @@ def _group_chunks_by_class(chunks):
             # 解析继承信息（从 code 中提取）
             code = chunk.get('code', '')
             if 'class ' in code:
-                # 提取 class XXX(Base): 中的 Base
                 for line in code.split('\n')[:3]:
                     if 'class ' in line and '(' in line:
                         inherit_part = line.split('(')[1].split(')')[0] if ')' in line else ''
@@ -83,31 +122,85 @@ def _extract_class_fields(overview_chunk):
 
     for line in lines:
         stripped = line.strip()
-        # 简单识别字段：self.xxx = 或 xxx: type =
         if ('self.' in stripped and '=' in stripped) or (': ' in stripped and '=' in stripped):
-            # 排除方法定义
             if not stripped.startswith('def ') and not stripped.startswith('@'):
                 fields.append(stripped)
 
     return fields
 
 
-async def summarize_class(client, class_name, group, model, max_tokens):
-    """为单个类生成概述"""
-    # 提取字段
+def _build_methods_summary(methods):
+    """构建方法摘要文本（名称+描述）"""
+    lines = []
+    for m in methods:
+        name = m['name']
+        desc = m.get('description', '（暂无描述）')
+        lines.append(f"  - {name}: {desc}")
+    return '\n'.join(lines) if lines else '  （无方法）'
+
+
+def _build_method_signatures(methods):
+    """构建方法签名文本（只含签名，无描述和代码）"""
+    lines = []
+    for m in methods:
+        code = m.get('code', '')
+        # 取 def 行作为签名
+        for line in code.split('\n'):
+            if 'def ' in line:
+                lines.append(f"  {line.strip()}")
+                break
+        else:
+            lines.append(f"  def {m['name']}(...)")
+    return '\n'.join(lines) if lines else '  （无方法）'
+
+
+def _build_fields_text(fields):
+    """构建字段文本"""
+    return '\n'.join(f'  {f}' for f in fields) if fields else '  （无类字段）'
+
+
+def _make_class_summary(class_name, group, result):
+    """从校验后的结果构建类摘要"""
+    return {
+        'type': 'class_summary',
+        'name': f"{class_name} (类概述)",
+        'file': group['file'],
+        'description': result.get('description', ''),
+        'module': result.get('module', ''),
+        'patterns': result.get('patterns', []),
+        'key_methods': result.get('key_methods', []),
+        'responsibility': result.get('responsibility', ''),
+        'method_count': len(group['methods']),
+        'class_name': class_name,
+        'text_for_embedding': f"{class_name}类: {result.get('description', '')}。职责: {result.get('responsibility', '')}",
+    }
+
+
+def _make_fallback_summary(class_name, group):
+    """生成兜底的类摘要"""
+    return {
+        'type': 'class_summary',
+        'name': f"{class_name} (类概述)",
+        'file': group['file'],
+        'description': f'{class_name} 类，包含 {len(group["methods"])} 个方法',
+        'module': '',
+        'patterns': [],
+        'key_methods': [m['name'] for m in group['methods'][:5]],
+        'responsibility': '',
+        'method_count': len(group['methods']),
+        'class_name': class_name,
+        'text_for_embedding': f"{class_name}类，包含{len(group['methods'])}个方法",
+    }
+
+
+async def summarize_class(client, class_name, group, model, max_tokens, input_limit):
+    """为单个类生成概述。
+    内容在限制内 → 单步发送全部。
+    内容超长 → 两步：先筛重要方法，再用重要方法生成摘要。
+    """
     fields = _extract_class_fields(group['overview'])
-
-    # 汇总所有方法
-    methods_summary = []
-    for method_chunk in group['methods']:
-        method_name = method_chunk['name']
-        description = method_chunk.get('description', '（暂无描述）')
-        methods_summary.append(f"  - {method_name}: {description}")
-
-    methods_text = '\n'.join(methods_summary) if methods_summary else '  （无方法）'
-
-    # 构建字段文本
-    fields_text = '\n'.join(f'  {f}' for f in fields) if fields else '  （无类字段）'
+    fields_text = _build_fields_text(fields)
+    methods_text = _build_methods_summary(group['methods'])
 
     prompt = CLASS_PROMPT.format(
         file=group['file'],
@@ -118,6 +211,23 @@ async def summarize_class(client, class_name, group, model, max_tokens):
         methods_summary=methods_text,
     )
 
+    # 检查 token 是否超限
+    budget = input_limit - max_tokens - 200
+    prompt_tokens = estimate_tokens(prompt)
+
+    if prompt_tokens <= budget:
+        # 单步：内容在限制内，直接发送
+        return await _single_step_class(client, prompt, class_name, group, model, max_tokens)
+
+    # 两步：先筛重要方法
+    return await _two_step_class(
+        client, class_name, group, fields_text,
+        model, max_tokens, input_limit, budget,
+    )
+
+
+async def _single_step_class(client, prompt, class_name, group, model, max_tokens):
+    """单步生成类概述"""
     try:
         resp = await client.chat.completions.create(
             model=model,
@@ -127,45 +237,107 @@ async def summarize_class(client, class_name, group, model, max_tokens):
         )
         content = resp.choices[0].message.content.strip()
 
-        # 解析 JSON
-        content = content.strip()
-        if content.startswith('```'):
-            lines = content.split('\n')
-            content = '\n'.join(lines[1:])
-            if content.endswith('```'):
-                content = content[:-3]
-            content = content.strip()
+        result = parse_llm_json(content)
+        if result:
+            validated = validate_response(result, CLASS_STEP2_FIELDS)
+            if validated and validated.get('description'):
+                return _make_class_summary(class_name, group, validated)
 
-        result = json.loads(content)
-        return {
-            'type': 'class_summary',
-            'name': f"{class_name} (类概述)",
-            'file': group['file'],
-            'description': result.get('description', ''),
-            'module': result.get('module', ''),
-            'patterns': result.get('patterns', []),
-            'key_methods': result.get('key_methods', []),
-            'responsibility': result.get('responsibility', ''),
-            'method_count': len(group['methods']),
-            'class_name': class_name,
-            # 用于向量化
-            'text_for_embedding': f"{class_name}类: {result.get('description', '')}。职责: {result.get('responsibility', '')}",
-        }
     except Exception as e:
         print(f"  ❌ 类 {class_name} 概述生成失败: {e}")
-        return {
-            'type': 'class_summary',
-            'name': f"{class_name} (类概述)",
-            'file': group['file'],
-            'description': f'{class_name} 类，包含 {len(group["methods"])} 个方法',
-            'module': '',
-            'patterns': [],
-            'key_methods': [m['name'] for m in group['methods'][:5]],
-            'responsibility': '',
-            'method_count': len(group['methods']),
-            'class_name': class_name,
-            'text_for_embedding': f"{class_name}类，包含{len(group['methods'])}个方法",
-        }
+
+    return _make_fallback_summary(class_name, group)
+
+
+async def _two_step_class(client, class_name, group, fields_text,
+                           model, max_tokens, input_limit, budget):
+    """两步生成类概述：先筛重要方法，再用重要方法生成摘要"""
+
+    # ---- Step 1: 筛选重要方法 ----
+    signatures_text = _build_method_signatures(group['methods'])
+
+    step1_prompt = CLASS_STEP1_PROMPT.format(
+        class_name=class_name,
+        inherits=group['inherits'],
+        class_docstring=group['class_docstring'] or '（无文档）',
+        fields=fields_text,
+        method_signatures=signatures_text,
+    )
+
+    important_names = []
+    try:
+        resp = await client.chat.completions.create(
+            model=model,
+            messages=[{'role': 'user', 'content': step1_prompt}],
+            max_tokens=200,
+            temperature=0.1,
+        )
+        content = resp.choices[0].message.content.strip()
+        result = parse_llm_json(content)
+        if result:
+            validated = validate_response(result, CLASS_STEP1_FIELDS)
+            if validated:
+                important_names = validated['important_methods']
+    except Exception as e:
+        print(f"  ⚠️ 类 {class_name} Step1 筛选失败: {e}")
+
+    # 如果 Step 1 失败，取前5个方法
+    if not important_names:
+        important_names = [m['name'] for m in group['methods'][:5]]
+
+    # ---- Step 2: 用重要方法生成摘要 ----
+    # 过滤出重要方法
+    important_methods = [m for m in group['methods'] if m['name'] in important_names]
+    if not important_methods:
+        important_methods = group['methods'][:5]
+
+    # 逐步添加方法描述直到接近预算
+    budget_for_step2 = input_limit - max_tokens - 500
+    included_methods = []
+    used_tokens = 0
+
+    # 先估算固定部分
+    step2_prompt_template = CLASS_PROMPT.format(
+        file=group['file'],
+        class_name=class_name,
+        inherits=group['inherits'],
+        class_docstring=group['class_docstring'] or '（无文档）',
+        fields=fields_text,
+        methods_summary='{placeholder}',
+    )
+    fixed_tokens = estimate_tokens(step2_prompt_template.replace('{placeholder}', ''))
+    remaining = budget_for_step2 - fixed_tokens
+
+    for m in important_methods:
+        name = m['name']
+        desc = m.get('description', '（暂无描述）')
+        entry = f"  - {name}: {desc}\n"
+
+        # 如果方法有代码且描述为空，附带代码摘要
+        code = m.get('code', '')
+        if not desc or desc == '（暂无描述）':
+            # 只取代码前5行作为补充
+            code_lines = code.split('\n')[:5]
+            entry += f"    代码片段: {'; '.join(l.strip() for l in code_lines[:3])}\n"
+
+        entry_tokens = estimate_tokens(entry)
+        if used_tokens + entry_tokens <= remaining:
+            included_methods.append(m)
+            used_tokens += entry_tokens
+        else:
+            break
+
+    methods_text = _build_methods_summary(included_methods)
+    step2_prompt = CLASS_PROMPT.format(
+        file=group['file'],
+        class_name=class_name,
+        inherits=group['inherits'],
+        class_docstring=group['class_docstring'] or '（无文档）',
+        fields=fields_text,
+        methods_summary=methods_text,
+    )
+
+    return await _single_step_class(client, step2_prompt, class_name, group, model, max_tokens)
 
 
 async def summarize_all_classes(chunks, config):
@@ -176,7 +348,11 @@ async def summarize_all_classes(chunks, config):
     )
     model = config['llm']['model']
     max_tokens = config['llm']['max_tokens']
+    config_fallback = config['llm'].get('max_input_tokens', 8000)
     concurrency = config['llm'].get('concurrency', 2)
+
+    # 获取模型输入长度限制
+    input_limit = await get_model_input_limit(client, model, config_fallback)
 
     # 按类分组
     class_chunks = _group_chunks_by_class(chunks)
@@ -190,7 +366,9 @@ async def summarize_all_classes(chunks, config):
     async def process_one(class_name, group):
         nonlocal done_count
         async with semaphore:
-            summary = await summarize_class(client, class_name, group, model, max_tokens)
+            summary = await summarize_class(
+                client, class_name, group, model, max_tokens, input_limit,
+            )
 
             async with done_lock:
                 done_count += 1

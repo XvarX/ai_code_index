@@ -128,44 +128,44 @@ async def list_tools() -> list[Tool]:
     return [
         # 第一层：符号搜索（精确、零 API 调用）
         create_tool(
-            "search_symbol",
-            "按名称搜索符号定义。优先使用精确格式 ClassName.method_name（如 MonsterManager.spawn_monster），不确定所属类时才用纯方法名（如 spawn_monster）进行模糊匹配。搜索类名直接输入（如 MonsterManager）。返回：符号名、文件路径、行号（1-based）、类型。",
+            "search_function",
+            "按代码标识符名称搜索符号定义（类名/函数名/方法名）。只接受英文标识符，如 MonsterManager、spawn_monster、MonsterManager.spawn_monster。不支持中文搜索。如果要用中文或自然语言查询（如'怪物管理'、'副本奖励'），请改用 search_by_type。重要：参数必须来自 Read 代码时看到的实际标识符，或本工具链其他工具返回的结果，禁止猜测。",
             {
                 "type": "object",
                 "properties": {
-                    "name": {"type": "string", "description": "符号名，支持: 类名(MonsterManager)、类.方法(MonsterManager.spawn_monster)、纯方法名(spawn_monster)"},
+                    "name": {"type": "string", "description": "英文符号名，必须从代码中获取。支持: 类名(MonsterManager)、类.方法(MonsterManager.spawn_monster)、纯方法名(spawn_monster)。不支持中文，禁止猜测。"},
                     "kind": {"type": "string", "description": "类型过滤: class/method/function", "default": ""}
                 }
             }
         ),
         create_tool(
             "list_symbols",
-            "[备用] 列出文件中所有类和方法定义。大多数场景直接 Read 文件即可。仅用于超大文件的结构速览。",
+            "[备用] 列出文件中所有类和方法定义。大多数场景直接 Read 文件即可。仅用于超大文件的结构速览。参数必须来自代码或工具返回，禁止猜测。",
             {
                 "type": "object",
                 "properties": {
-                    "file": {"type": "string", "description": "文件相对路径，如 gameplay/monster.py"},
+                    "file": {"type": "string", "description": "文件相对路径，必须从代码或工具返回中获取，禁止猜测"},
                     "kind": {"type": "string", "description": "类型过滤: class/method/function", "default": ""}
                 }
             }
         ),
         create_tool(
             "module_overview",
-            "列出模块中所有类和顶层函数，适合快速了解模块结构。返回：类列表和函数列表（含文件路径和行号）。",
+            "列出模块中所有类和顶层函数，适合快速了解模块结构。返回：类列表和函数列表（含文件路径和行号）。参数必须来自代码或工具返回，禁止猜测。",
             {
                 "type": "object",
                 "properties": {
-                    "module_path": {"type": "string", "description": "模块路径（相对项目根），如 gameplay 或 gameplay/monster"}
+                    "module_path": {"type": "string", "description": "模块路径，必须从代码或工具返回中获取，禁止猜测"}
                 }
             }
         ),
         create_tool(
             "find_inheritance",
-            "查找类的继承关系（父类/子类）",
+            "查找类的继承关系（父类/子类）。参数必须来自代码中看到的实际类名，禁止猜测。",
             {
                 "type": "object",
                 "properties": {
-                    "name": {"type": "string", "description": "类名"},
+                    "name": {"type": "string", "description": "类名，必须从代码中获取，禁止猜测"},
                     "direction": {"type": "string", "description": "parent 查父类, children 查子类", "default": "parent"}
                 }
             }
@@ -173,35 +173,35 @@ async def list_tools() -> list[Tool]:
         # 第二层：代码导航（LSP 精确定位）
         create_tool(
             "goto_definition",
-            "[备用] 根据文件位置跳转到符号定义处。日常用 search_symbol(name) 即可。仅当多个同名符号需要按上下文消歧时使用。输入：file（相对路径如 gameplay/monster.py）、line（1-based）。",
+            "[备用] 根据文件位置跳转到符号定义处。日常用 search_function(name) 即可。仅当多个同名符号需要按上下文消歧时使用。file 和 line 必须来自代码或工具返回，禁止猜测。",
             {
                 "type": "object",
                 "properties": {
-                    "file": {"type": "string", "description": "文件相对路径，如 gameplay/monster.py"},
-                    "line": {"type": "integer", "description": "行号（1-based）"},
+                    "file": {"type": "string", "description": "文件相对路径，必须从代码或工具返回中获取"},
+                    "line": {"type": "integer", "description": "行号（1-based），必须从代码或工具返回中获取"},
                     "column": {"type": "integer", "description": "列号（0-based，可选）", "default": 0}
                 }
             }
         ),
         create_tool(
             "find_references",
-            "查找符号在项目中的所有引用位置。用于评估改动影响范围。输入：file（相对路径）和 line（1-based）。返回所有引用的 file:line 列表。",
+            "查找符号在项目中的所有引用位置。用于评估改动影响范围。file 和 line 必须来自代码或工具返回，禁止猜测。",
             {
                 "type": "object",
                 "properties": {
-                    "file": {"type": "string", "description": "文件相对路径，如 gameplay/monster.py"},
-                    "line": {"type": "integer", "description": "行号（1-based）"}
+                    "file": {"type": "string", "description": "文件相对路径，必须从代码或工具返回中获取"},
+                    "line": {"type": "integer", "description": "行号（1-based），必须从代码或工具返回中获取"}
                 }
             }
         ),
         create_tool(
             "get_call_chain",
-            "获取函数的调用链（上下游关系）。用于追踪数据流和理解模块间依赖。输入：file（相对路径）和 line（1-based），direction: outgoing=它调用了谁, incoming=谁调用了它。",
+            "获取函数的调用链（上下游关系）。用于追踪数据流和理解模块间依赖。file 和 line 必须来自代码或工具返回，禁止猜测。",
             {
                 "type": "object",
                 "properties": {
-                    "file": {"type": "string", "description": "文件相对路径，如 gameplay/monster.py"},
-                    "line": {"type": "integer", "description": "行号（1-based）"},
+                    "file": {"type": "string", "description": "文件相对路径，必须从代码或工具返回中获取"},
+                    "line": {"type": "integer", "description": "行号（1-based），必须从代码或工具返回中获取"},
                     "direction": {"type": "string", "description": "outgoing=它调用了谁, incoming=谁调用了它", "default": "outgoing"}
                 }
             }
@@ -209,37 +209,37 @@ async def list_tools() -> list[Tool]:
         # 第三层：模糊搜索（RAG，仅用于初始发现）
         create_tool(
             "find_module_summary",
-            "查找模块的概述信息，包含标准流程、入口点等。这是了解'如何使用一个模块'的最佳方式。注意：返回的是已有代码的描述，仅用于理解架构，不要照搬模块名或类名到新代码中。",
+            "查找模块的概述信息，包含标准流程、入口点等。这是了解'如何使用一个模块'的最佳方式。注意：返回的是已有代码的描述，仅用于理解架构，不要照搬模块名或类名到新代码中。模块名必须来自代码或工具返回，禁止猜测。",
             {
                 "type": "object",
                 "properties": {
                     "module_name": {
                         "type": "string",
-                        "description": "模块名，如 scene, gameplay/monster"
+                        "description": "模块名，必须从代码或工具返回中获取，禁止猜测"
                     }
                 }
             }
         ),
         create_tool(
             "find_class_summary",
-            "查找类的概述信息，包含职责、核心方法等。注意：返回的是已有代码的描述，仅用于理解架构，不要照搬模块名或类名到新代码中。",
+            "查找类的概述信息，包含职责、核心方法等。注意：返回的是已有代码的描述，仅用于理解架构，不要照搬模块名或类名到新代码中。类名必须来自代码或工具返回，禁止猜测。",
             {
                 "type": "object",
                 "properties": {
                     "class_name": {
                         "type": "string",
-                        "description": "类名，如 SceneManager, MonsterManager"
+                        "description": "类名，必须从代码或工具返回中获取，禁止猜测"
                     }
                 }
             }
         ),
         create_tool(
             "search_by_type",
-            "语义搜索代码。输入自然语言查询，返回相关代码块。支持按 chunk_type 和 module 过滤结果。注意：返回的是已有代码的描述，仅用于理解架构，不要照搬模块名或类名到新代码中。",
+            "唯一接受自然语言查询的工具。输入中文或自然语言描述，返回相关代码块。当你不知道确切的标识符名称、只知道功能描述时使用此工具。支持按 chunk_type 和 module 过滤结果。注意：返回的是已有代码的描述，仅用于理解架构，不要照搬模块名或类名到新代码中。",
             {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "自然语言搜索查询，如: 怪物管理、定时任务"},
+                    "query": {"type": "string", "description": "自然语言查询，支持中文，如: 怪物管理、副本奖励发放、玩家升级"},
                     "chunk_type": {"type": "string", "description": "结果类型过滤: function/class_summary/module_summary，留空搜索所有类型", "default": ""},
                     "module": {"type": "string", "description": "模块名过滤（如 monster、scene），留空搜索所有模块", "default": ""},
                     "n_results": {"type": "integer", "default": 5}
@@ -258,7 +258,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
     try:
         # 第一层：符号搜索（LSP）
-        if name == "search_symbol":
+        if name == "search_function":
             result = await asyncio.to_thread(lsp.search_symbol,
                 arguments.get("name", ""),
                 arguments.get("kind", ""))
@@ -304,14 +304,14 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         elif name == "find_by_struct":
             result = json.dumps({
                 "deprecated": True,
-                "message": "find_by_struct 已废弃，请使用 search_symbol(name) 按名称搜索类，或 list_symbols(file) 列出文件中的类和方法",
-                "alternative": "search_symbol / list_symbols"
+                "message": "find_by_struct 已废弃，请使用 search_function(name) 按名称搜索类，或 list_symbols(file) 列出文件中的类和方法",
+                "alternative": "search_function / list_symbols"
             }, ensure_ascii=False)
         elif name == "find_by_pattern":
             result = json.dumps({
                 "deprecated": True,
-                "message": "find_by_pattern 已废弃，请使用 search_symbol(name) 或 search_by_type(query) 替代",
-                "alternative": "search_symbol / search_by_type"
+                "message": "find_by_pattern 已废弃，请使用 search_function(name) 或 search_by_type(query) 替代",
+                "alternative": "search_function / search_by_type"
             }, ensure_ascii=False)
         elif name == "find_function":
             result = json.dumps({

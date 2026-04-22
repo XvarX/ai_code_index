@@ -8,7 +8,11 @@
       "Bash(pylsp --help)",
       "Bash(pip list:*)",
       "Bash(where pyright-langserver:*)",
-      "Read(//d/space/labspace/testserver/**)"
+      "Read(//d/space/labspace/testserver/**)",
+      "Bash(python -c \"import ast; [ast.parse\\(open\\(f, encoding='utf-8'\\).read\\(\\)\\) for f in ['build/llm_utils.py', 'build/describer.py', 'build/class_summarizer.py', 'build/module_summarizer.py']]\")",
+      "Bash(python test_llm_utils.py)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('build/module_summarizer.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "Bash(python -c ':*)"
     ],
     "additionalDirectories": [
       "D:\\space\\labspace\\testserver\\base",
